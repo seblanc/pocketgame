@@ -5,8 +5,8 @@
  * Wi-Fi) and the Wi-Fi setup hotspot screen.
  *
  * Buttons: a short press on LEFT goes back (asking first while a game is running);
- * holding LEFT + RIGHT for 3 s opens Settings. The middle button is the power key:
- * the firmware never reads it.
+ * holding LEFT + RIGHT for 3 s opens Settings. The middle button is only the power
+ * key: holding it 3 s powers the board off (or sleeps it on USB).
  *
  * Serial protocol (USB Serial/JTAG console, one command per line):
  *   new | play <0-8> | board   tic-tac-toe, as before (switches to the game screen):
@@ -28,7 +28,9 @@
 #include "board.h"
 #include "display.h"
 #include "driver/gpio.h"
+#include "driver/rtc_io.h"
 #include "esp_app_desc.h"
+#include "esp_sleep.h"
 #include "esp_log.h"
 #include "esp_ota_ops.h"
 #include "esp_timer.h"
@@ -46,6 +48,7 @@
 
 #define COMBO_MS 3000
 #define SHORT_PRESS_MS 1000
+#define POWER_HOLD_MS 3000
 #define HEARTBEAT_S 10
 #define BATTERY_S 20
 
@@ -54,7 +57,7 @@ const game_info_t GAMES[] = {
 };
 const int GAME_COUNT = sizeof(GAMES) / sizeof(GAMES[0]);
 
-static const char *const SCREEN_NAMES[] = {"menu", "game", "confirm", "settings", "wifi"};
+static const char *const SCREEN_NAMES[] = {"menu", "game", "confirm", "settings", "wifi", "off"};
 
 static SemaphoreHandle_t s_lock;
 static TaskHandle_t s_display_task;
@@ -239,6 +242,8 @@ static void app_back(const char *src)
         break;
     case SCR_MENU:
         show_locked(SCR_MENU);
+        break;
+    case SCR_OFF:
         break;
     }
     unlock();
@@ -613,31 +618,66 @@ static void touch_task(void *arg)
     }
 }
 
+/* Middle key held 3 s: release the battery latch. On battery the board loses power once
+ * the key is let go (the key itself powers it while held); on USB it stays powered, so
+ * it sleeps instead and the next press of the key wakes it. Does not return. */
+static void power_off(void)
+{
+    lock();
+    show_locked(SCR_OFF);
+    unlock();
+    out("POWER off: release the power key");
+    vTaskDelay(pdMS_TO_TICKS(300)); /* let the screen draw */
+    while (gpio_get_level(KEY_PWR) == 0) {
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+    vTaskDelay(pdMS_TO_TICKS(50));
+    gpio_set_level(LCD_BL, 0);
+    gpio_set_level(BAT_EN, 0);
+    vTaskDelay(pdMS_TO_TICKS(800));
+
+    /* still running: powered over USB */
+    out("POWER usb: sleeping until the power key is pressed");
+    vTaskDelay(pdMS_TO_TICKS(50));
+    gpio_hold_en(LCD_BL);
+    gpio_hold_en(BAT_EN);
+    gpio_deep_sleep_hold_en();
+    rtc_gpio_pullup_en(KEY_PWR);
+    rtc_gpio_pulldown_dis(KEY_PWR);
+    esp_sleep_enable_ext0_wakeup(KEY_PWR, 0);
+    esp_deep_sleep_start();
+}
+
 static void button_task(void *arg)
 {
-    static const int PINS[2] = {KEY_LEFT, KEY_RIGHT};
-    static const char *const NAMES[2] = {"left", "right"};
-    bool down[2] = {false, false};
-    TickType_t down_at[2] = {0, 0};
-    bool used[2] = {false, false}; /* part of a combo: no short-press action */
+    static const int PINS[3] = {KEY_LEFT, KEY_RIGHT, KEY_PWR};
+    static const char *const NAMES[3] = {"left", "right", "pwr"};
+    bool down[3] = {false, false, false};
+    TickType_t down_at[3] = {0, 0, 0};
+    bool used[3] = {false, false, false}; /* part of a combo, or held at boot: no action */
     TickType_t combo_at = 0;
     bool combo_fired = false;
 
-    for (int i = 0; i < 2; i++) {
+    for (int i = 0; i < 3; i++) {
         gpio_reset_pin(PINS[i]);
         gpio_set_direction(PINS[i], GPIO_MODE_INPUT);
         gpio_set_pull_mode(PINS[i], GPIO_PULLUP_ONLY);
     }
     vTaskDelay(pdMS_TO_TICKS(50));
-    for (int i = 0; i < 2; i++) {
+    for (int i = 0; i < 3; i++) {
         down[i] = gpio_get_level(PINS[i]) == 0;
-        used[i] = true; /* held at boot: ignore until released */
+        /* held at boot (the power-on press, too): ignore until released */
+        used[i] = true;
     }
 
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(20));
         TickType_t now = xTaskGetTickCount();
-        for (int i = 0; i < 2; i++) {
+        if (down[2] && !used[2] && now - down_at[2] >= pdMS_TO_TICKS(POWER_HOLD_MS)) {
+            used[2] = true;
+            power_off();
+        }
+        for (int i = 0; i < 3; i++) {
             bool d = gpio_get_level(PINS[i]) == 0;
             if (d != down[i]) {
                 vTaskDelay(pdMS_TO_TICKS(15));
@@ -698,6 +738,11 @@ void app_main(void)
     gpio_reset_pin(BAT_EN);
     gpio_set_direction(BAT_EN, GPIO_MODE_OUTPUT);
     gpio_set_level(BAT_EN, 1);
+    /* undo what power_off() set up when the board slept on USB */
+    gpio_deep_sleep_hold_dis();
+    gpio_hold_dis(BAT_EN);
+    gpio_hold_dis(LCD_BL);
+    rtc_gpio_deinit(KEY_PWR);
 
     s_lock = xSemaphoreCreateMutex();
     game_new(&s_v.game);
@@ -730,6 +775,8 @@ void app_main(void)
     } else {
         out("TOUCH NONE: no touch controller answered on I2C");
     }
+
+    out("KEYS left=%d right=%d pwr=%d (pwr: hold 3 s to power off)", KEY_LEFT, KEY_RIGHT, KEY_PWR);
 
     settings_init();
     settings_load_audio(&s_v.vol, &s_v.mute);

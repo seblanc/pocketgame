@@ -7,7 +7,9 @@ Minimal UI: dark background, thin lines, one accent colour.
   (IO1 / VBAT_ADC, 200k/100k divider) and the Wi-Fi state. The bar only shows outside games.
 - **Tic-tac-toe:** tap a cell to place X or O; after a win or a draw, tap anywhere for a new game.
 - **Buttons:** a short press on LEFT goes back (asks to confirm while a game is in progress);
-  holding LEFT + RIGHT for 3 s opens Settings. The middle button is the power key and is not used by the app.
+  holding LEFT + RIGHT for 3 s opens Settings. The middle button is only the power key:
+  holding it 3 s shows "Powering off" and releases the battery latch (on USB power the board sleeps
+  instead, and the next press wakes it).
 - **Settings:** volume slider, mute (both saved in NVS) and Wi-Fi setup: the board opens the hotspot
   `PocketGame-XXXX`; join it from a phone, the setup page opens (or visit `192.168.4.1`), enter the home
   network and the board joins it.
@@ -16,7 +18,7 @@ Minimal UI: dark background, thin lines, one accent colour.
   (for example from GitHub releases).
 
 Pins come from the vendor schematic (`docs/ESP32-S3-LCD-1.54-Schematic.pdf`), see `source/main/board.h`.
-LEFT = GPIO0 (BOOT), RIGHT = GPIO4, power key GPIO5 (never read).
+LEFT = GPIO0 (BOOT), RIGHT = GPIO4, power key GPIO5 (active low), battery latch BAT_EN = GPIO2.
 
 Serial commands (USB-C console, 115200):
 

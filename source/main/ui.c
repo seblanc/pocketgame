@@ -309,6 +309,10 @@ void ui_render(const app_view_t *v)
     case SCR_WIFI:
         draw_wifi(v);
         break;
+    case SCR_OFF:
+        gfx_text_mid(SCREEN_W / 2, 100, "POWERING OFF", 2, COL_TEXT);
+        gfx_text_mid(SCREEN_W / 2, 130, "RELEASE THE BUTTON", 1, COL_DIM);
+        break;
     }
     display_flush();
 }
@@ -363,6 +367,8 @@ hit_t ui_hit(const app_view_t *v, int x, int y, int *arg)
         return HIT_NONE;
     case SCR_WIFI:
         return in_rect(BTN_DONE, x, y) ? HIT_WIFI_DONE : HIT_NONE;
+    case SCR_OFF:
+        return HIT_NONE;
     }
     return HIT_NONE;
 }

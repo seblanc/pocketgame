@@ -4,7 +4,7 @@
 #include "game.h"
 #include "net.h"
 
-typedef enum { SCR_MENU, SCR_GAME, SCR_CONFIRM, SCR_SETTINGS, SCR_WIFI } screen_t;
+typedef enum { SCR_MENU, SCR_GAME, SCR_CONFIRM, SCR_SETTINGS, SCR_WIFI, SCR_OFF } screen_t;
 
 /* One entry per game on the home screen. A new game adds an entry here, its
  * tile icon and screen in ui.c, and its actions in main.c. */
