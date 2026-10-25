@@ -10,7 +10,8 @@
 
 #define RATE 16000 /* MCLK = 256 * RATE = 4.096 MHz */
 #define AMPLITUDE 6000
-#define DAC_VOLUME 0xB4 /* ES8311 reg 0x32: 0xBF = 0 dB, 0.5 dB steps */
+#define DAC_MAX 0xBF   /* ES8311 reg 0x32: 0xBF = 0 dB, 0.5 dB steps */
+#define DAC_RANGE 80   /* volume 1..100 spans 40 dB */
 
 typedef struct {
     uint16_t hz, ms;
@@ -22,10 +23,15 @@ static const note_t TUNE_BAD[] = {{180, 140}, {0, 0}};
 static const note_t TUNE_WIN[] = {{523, 110}, {659, 110}, {784, 110}, {1047, 240}, {0, 0}};
 static const note_t TUNE_DRAW[] = {{440, 160}, {330, 260}, {0, 0}};
 static const note_t TUNE_NEW[] = {{880, 50}, {1175, 70}, {0, 0}};
-static const note_t *const TUNES[] = {TUNE_X, TUNE_O, TUNE_BAD, TUNE_WIN, TUNE_DRAW, TUNE_NEW};
+static const note_t TUNE_TICK[] = {{1320, 25}, {0, 0}};
+static const note_t *const TUNES[] = {TUNE_X, TUNE_O, TUNE_BAD, TUNE_WIN, TUNE_DRAW, TUNE_NEW, TUNE_TICK};
 
 static QueueHandle_t s_q;
 static i2s_chan_handle_t s_tx;
+static volatile int s_vol = 70;
+static volatile bool s_mute;
+
+static uint8_t dac_level(void) { return s_vol <= 0 ? 0 : (uint8_t)(DAC_MAX - (100 - s_vol) * DAC_RANGE / 100); }
 
 static void play_note(const note_t *n)
 {
@@ -105,7 +111,6 @@ static bool es8311_start(void)
         {0x15, 0x40},
         {0x37, 0x08}, /* bypass the DAC equalizer */
         {0x45, 0x00},
-        {0x32, DAC_VOLUME},
         {0x31, 0x00}, /* unmute */
     };
     for (size_t i = 0; i < sizeof(SEQ) / sizeof(SEQ[0]); i++) {
@@ -113,7 +118,7 @@ static bool es8311_start(void)
             return false;
         }
     }
-    return true;
+    return i2cbus_write_reg(ES8311_ADDR, 0x32, dac_level());
 }
 
 const char *sound_init(void)
@@ -155,9 +160,18 @@ const char *sound_init(void)
     return "es8311";
 }
 
+void sound_set_level(int vol, bool mute)
+{
+    s_vol = vol < 0 ? 0 : vol > 100 ? 100 : vol;
+    s_mute = mute;
+    if (s_tx) {
+        i2cbus_write_reg(ES8311_ADDR, 0x32, dac_level());
+    }
+}
+
 void sound_play(sound_t s)
 {
-    if (s_q) {
+    if (s_q && !s_mute && s_vol > 0) {
         xQueueSend(s_q, &s, 0);
     }
 }

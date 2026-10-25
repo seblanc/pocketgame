@@ -7,5 +7,5 @@
 bool touch_init(void);
 const char *touch_chip(void);
 uint8_t touch_addr(void);
-/* Polls once; true with the coordinates on a new press (finger down edge). */
-bool touch_poll_press(int *x, int *y);
+/* Polls once; true with the coordinates while a finger is on the glass. */
+bool touch_read(int *x, int *y);

@@ -25,10 +25,14 @@
 #define PA_CTRL 7
 #define ES8311_ADDR 0x18
 
-/* buttons, all active low with pull-ups */
-#define KEY_MINUS 0 /* also BOOT */
-#define KEY_PLUS 4
-#define KEY_PWR 5
+/* buttons on the top edge, active low with pull-ups. The middle one is the power key
+ * (KEY_PWR, GPIO5): the firmware never reads it. */
+#define KEY_LEFT 0  /* KEY_MINUS, also BOOT */
+#define KEY_RIGHT 4 /* KEY_PLUS */
 
 /* battery power latch: high keeps the board on when running from the battery */
 #define BAT_EN 2
+
+/* VBAT through R27 200k / R32 100k to IO1 (ADC1 channel 0) */
+#define BAT_ADC 1
+#define BAT_DIVIDER 3

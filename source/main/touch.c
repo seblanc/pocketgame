@@ -23,7 +23,6 @@ static const struct {
 static tp_kind_t s_kind = TP_NONE;
 static uint8_t s_addr;
 static const char *s_name = "none";
-static bool s_down;
 
 bool touch_init(void)
 {
@@ -87,7 +86,7 @@ static bool read_point(int *n, int *x, int *y)
     }
 }
 
-bool touch_poll_press(int *x, int *y)
+bool touch_read(int *x, int *y)
 {
     int n = 0, px = 0, py = 0;
     if (!read_point(&n, &px, &py)) {
@@ -96,11 +95,9 @@ bool touch_poll_press(int *x, int *y)
     if (px >= SCREEN_W || py >= SCREEN_H) {
         n = 0; /* noise outside the glass */
     }
-    bool press = n > 0 && !s_down;
-    s_down = n > 0;
-    if (press) {
+    if (n > 0) {
         *x = px;
         *y = py;
     }
-    return press;
+    return n > 0;
 }

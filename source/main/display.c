@@ -1,9 +1,8 @@
 #include "display.h"
 #include <math.h>
 #include <stdbool.h>
-#include "board.h"
-#include <stdio.h>
 #include <string.h>
+#include "board.h"
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
 #include "esp_heap_caps.h"
@@ -16,15 +15,6 @@
 #include "freertos/task.h"
 
 #define CHUNK_LINES 40
-#define RGB(r, g, b) ((uint16_t)((((r) & 0xF8) << 8) | (((g) & 0xFC) << 3) | ((b) >> 3)))
-
-#define COL_BG RGB(16, 20, 40)
-#define COL_GRID RGB(150, 160, 190)
-#define COL_X RGB(255, 80, 80)
-#define COL_O RGB(60, 200, 255)
-#define COL_WIN RGB(255, 220, 40)
-#define COL_TEXT RGB(235, 235, 235)
-#define COL_DIM RGB(120, 125, 150)
 
 static esp_lcd_panel_handle_t s_panel;
 static SemaphoreHandle_t s_done;
@@ -43,8 +33,11 @@ static void push_rows(int panel_y, const uint16_t *src, int lines)
     xSemaphoreTake(s_done, pdMS_TO_TICKS(500));
 }
 
-static void fb_flush(void)
+void display_flush(void)
 {
+    if (!s_panel) {
+        return;
+    }
     for (int y = 0; y < SCREEN_H; y += CHUNK_LINES) {
         push_rows(y, s_fb + y * SCREEN_W, CHUNK_LINES);
     }
@@ -52,8 +45,34 @@ static void fb_flush(void)
 
 static inline uint16_t swap16(uint16_t c) { return (uint16_t)((c >> 8) | (c << 8)); }
 
-static void fill_rect(int x, int y, int w, int h, uint16_t c)
+/* mixes colour c over the pixel with coverage a (0..1) */
+static void blend(int x, int y, uint16_t c, float a)
 {
+    if (x < 0 || y < 0 || x >= SCREEN_W || y >= SCREEN_H || a <= 0) {
+        return;
+    }
+    uint16_t *p = &s_fb[y * SCREEN_W + x];
+    if (a >= 1) {
+        *p = swap16(c);
+        return;
+    }
+    uint16_t d = swap16(*p);
+    int ia = (int)(a * 256), na = 256 - ia;
+    int r = ((c >> 11) * ia + (d >> 11) * na) >> 8;
+    int g = (((c >> 5) & 0x3F) * ia + ((d >> 5) & 0x3F) * na) >> 8;
+    int b = ((c & 0x1F) * ia + (d & 0x1F) * na) >> 8;
+    *p = swap16((uint16_t)((r << 11) | (g << 5) | b));
+}
+
+static inline float clamp01(float v) { return v < 0 ? 0 : v > 1 ? 1 : v; }
+
+void gfx_clear(uint16_t c) { gfx_rect(0, 0, SCREEN_W, SCREEN_H, c); }
+
+void gfx_rect(int x, int y, int w, int h, uint16_t c)
+{
+    if (!s_fb) {
+        return;
+    }
     uint16_t v = swap16(c);
     for (int j = y < 0 ? 0 : y; j < y + h && j < SCREEN_H; j++) {
         for (int i = x < 0 ? 0 : x; i < x + w && i < SCREEN_W; i++) {
@@ -62,12 +81,14 @@ static void fill_rect(int x, int y, int w, int h, uint16_t c)
     }
 }
 
-static void thick_line(float x0, float y0, float x1, float y1, float width, uint16_t c)
+void gfx_line(float x0, float y0, float x1, float y1, float width, uint16_t c)
 {
-    uint16_t v = swap16(c);
+    if (!s_fb) {
+        return;
+    }
     float r = width / 2;
-    int minx = (int)floorf(fminf(x0, x1) - r), maxx = (int)ceilf(fmaxf(x0, x1) + r);
-    int miny = (int)floorf(fminf(y0, y1) - r), maxy = (int)ceilf(fmaxf(y0, y1) + r);
+    int minx = (int)floorf(fminf(x0, x1) - r - 1), maxx = (int)ceilf(fmaxf(x0, x1) + r + 1);
+    int miny = (int)floorf(fminf(y0, y1) - r - 1), maxy = (int)ceilf(fmaxf(y0, y1) + r + 1);
     float dx = x1 - x0, dy = y1 - y0, len2 = dx * dx + dy * dy;
     for (int y = miny < 0 ? 0 : miny; y <= maxy && y < SCREEN_H; y++) {
         for (int x = minx < 0 ? 0 : minx; x <= maxx && x < SCREEN_W; x++) {
@@ -75,35 +96,78 @@ static void thick_line(float x0, float y0, float x1, float y1, float width, uint
             float t = len2 > 0 ? (px * dx + py * dy) / len2 : 0;
             t = t < 0 ? 0 : t > 1 ? 1 : t;
             float ex = px - t * dx, ey = py - t * dy;
-            if (ex * ex + ey * ey <= r * r) {
-                s_fb[y * SCREEN_W + x] = v;
-            }
+            blend(x, y, c, clamp01(r + 0.5f - sqrtf(ex * ex + ey * ey)));
         }
     }
 }
 
-static void ring(float cx, float cy, float r_out, float r_in, uint16_t c)
+void gfx_arc(float cx, float cy, float r, float width, float a0, float a1, uint16_t c)
 {
-    uint16_t v = swap16(c);
-    for (int y = (int)(cy - r_out) - 1; y <= (int)(cy + r_out) + 1; y++) {
-        for (int x = (int)(cx - r_out) - 1; x <= (int)(cx + r_out) + 1; x++) {
-            if (x < 0 || y < 0 || x >= SCREEN_W || y >= SCREEN_H) {
+    if (!s_fb) {
+        return;
+    }
+    float h = width / 2;
+    bool full = a1 - a0 >= 360;
+    int ext = (int)ceilf(r + h + 1);
+    for (int y = (int)cy - ext; y <= (int)cy + ext; y++) {
+        for (int x = (int)cx - ext; x <= (int)cx + ext; x++) {
+            float dx = x + 0.5f - cx, dy = y + 0.5f - cy;
+            float a = clamp01(h + 0.5f - fabsf(sqrtf(dx * dx + dy * dy) - r));
+            if (a <= 0) {
                 continue;
             }
-            float dx = x + 0.5f - cx, dy = y + 0.5f - cy, d2 = dx * dx + dy * dy;
-            if (d2 <= r_out * r_out && d2 >= r_in * r_in) {
-                s_fb[y * SCREEN_W + x] = v;
+            if (!full) {
+                float ang = atan2f(dy, dx) * (180.0f / (float)M_PI);
+                if (ang < 0) {
+                    ang += 360;
+                }
+                if (!((ang >= a0 && ang <= a1) || (ang + 360 >= a0 && ang + 360 <= a1))) {
+                    continue;
+                }
             }
+            blend(x, y, c, a);
         }
     }
 }
 
-static int text_width(const char *s, int scale) { return (int)strlen(s) * 6 * scale - scale; }
+void gfx_ring(float cx, float cy, float r, float width, uint16_t c) { gfx_arc(cx, cy, r, width, 0, 360, c); }
 
-static void draw_text(int x, int y, const char *s, int scale, uint16_t c)
+void gfx_disc(float cx, float cy, float r, uint16_t c)
+{
+    if (!s_fb) {
+        return;
+    }
+    int ext = (int)ceilf(r + 1);
+    for (int y = (int)cy - ext; y <= (int)cy + ext; y++) {
+        for (int x = (int)cx - ext; x <= (int)cx + ext; x++) {
+            float dx = x + 0.5f - cx, dy = y + 0.5f - cy;
+            blend(x, y, c, clamp01(r + 0.5f - sqrtf(dx * dx + dy * dy)));
+        }
+    }
+}
+
+void gfx_rrect(int x, int y, int w, int h, int r, uint16_t c)
+{
+    gfx_rect(x + r, y, w - 2 * r, 1, c);
+    gfx_rect(x + r, y + h - 1, w - 2 * r, 1, c);
+    gfx_rect(x, y + r, 1, h - 2 * r, c);
+    gfx_rect(x + w - 1, y + r, 1, h - 2 * r, c);
+    float rr = r - 0.5f;
+    gfx_arc(x + r, y + r, rr, 1, 180, 270, c);
+    gfx_arc(x + w - r, y + r, rr, 1, 270, 360, c);
+    gfx_arc(x + w - r, y + h - r, rr, 1, 0, 90, c);
+    gfx_arc(x + r, y + h - r, rr, 1, 90, 180, c);
+}
+
+int gfx_text_w(const char *s, int scale) { return *s ? (int)strlen(s) * 6 * scale - scale : 0; }
+
+void gfx_text(int x, int y, const char *s, int scale, uint16_t c)
 {
     for (; *s; s++, x += 6 * scale) {
         char ch = *s;
+        if (ch >= 'a' && ch <= 'z') {
+            ch -= 'a' - 'A';
+        }
         if (ch < ' ' || ch > 'Z') {
             ch = ' ';
         }
@@ -111,86 +175,21 @@ static void draw_text(int x, int y, const char *s, int scale, uint16_t c)
         for (int col = 0; col < 5; col++) {
             for (int row = 0; row < 7; row++) {
                 if (g[col] & (1 << row)) {
-                    fill_rect(x + col * scale, y + row * scale, scale, scale, c);
+                    gfx_rect(x + col * scale, y + row * scale, scale, scale, c);
                 }
             }
         }
     }
 }
 
-static void cell_center(int cell, float *cx, float *cy)
+void gfx_text_mid(int cx, int y, const char *s, int scale, uint16_t c)
 {
-    *cx = GRID_X0 + (cell % 3) * CELL_PX + CELL_PX / 2.0f;
-    *cy = GRID_Y0 + (cell / 3) * CELL_PX + CELL_PX / 2.0f;
+    gfx_text(cx - gfx_text_w(s, scale) / 2, y, s, scale, c);
 }
 
-int display_cell_at(int x, int y)
+void gfx_text_right(int x1, int y, const char *s, int scale, uint16_t c)
 {
-    int col = (x - GRID_X0) / CELL_PX, row = (y - GRID_Y0) / CELL_PX;
-    if (x < GRID_X0 || y < GRID_Y0 || col > 2 || row > 2) {
-        return -1;
-    }
-    return row * 3 + col;
-}
-
-void display_render(const view_t *v)
-{
-    if (!s_panel) {
-        return;
-    }
-    const game_t *g = &v->game;
-    fill_rect(0, 0, SCREEN_W, SCREEN_H, COL_BG);
-
-    /* status bar: scores at the sides, turn or result in the middle */
-    char buf[16];
-    snprintf(buf, sizeof(buf), "X%d", v->wins_x > 99 ? 99 : v->wins_x);
-    draw_text(4, 12, buf, 2, COL_X);
-    snprintf(buf, sizeof(buf), "O%d", v->wins_o > 99 ? 99 : v->wins_o);
-    draw_text(SCREEN_W - 4 - text_width(buf, 2), 12, buf, 2, COL_O);
-
-    uint16_t tc = COL_TEXT;
-    if (g->status == GAME_WIN) {
-        snprintf(buf, sizeof(buf), "%c WINS!", game_mark_char(g->winner));
-        tc = g->winner == CELL_X ? COL_X : COL_O;
-    } else if (g->status == GAME_DRAW) {
-        snprintf(buf, sizeof(buf), "DRAW!");
-    } else {
-        snprintf(buf, sizeof(buf), "%c TURN", game_mark_char(g->turn));
-        tc = g->turn == CELL_X ? COL_X : COL_O;
-    }
-    draw_text((SCREEN_W - text_width(buf, 3)) / 2, 8, buf, 3, tc);
-
-    /* grid */
-    int grid = 3 * CELL_PX;
-    for (int i = 1; i < 3; i++) {
-        fill_rect(GRID_X0 + i * CELL_PX - 2, GRID_Y0 + 4, 4, grid - 8, COL_GRID);
-        fill_rect(GRID_X0 + 4, GRID_Y0 + i * CELL_PX - 2, grid - 8, 4, COL_GRID);
-    }
-
-    bool over = g->status != GAME_PLAYING;
-    for (int c = 0; c < 9; c++) {
-        float cx, cy;
-        cell_center(c, &cx, &cy);
-        bool on_line = g->status == GAME_WIN &&
-                       (c == g->win_line[0] || c == g->win_line[1] || c == g->win_line[2]);
-        if (g->cells[c] == CELL_X) {
-            uint16_t col = over && !on_line ? COL_DIM : COL_X;
-            thick_line(cx - 19, cy - 19, cx + 19, cy + 19, 9, col);
-            thick_line(cx - 19, cy + 19, cx + 19, cy - 19, 9, col);
-        } else if (g->cells[c] == CELL_O) {
-            ring(cx, cy, 23, 15, over && !on_line ? COL_DIM : COL_O);
-        }
-    }
-
-    if (g->status == GAME_WIN) {
-        float ax, ay, bx, by;
-        cell_center(g->win_line[0], &ax, &ay);
-        cell_center(g->win_line[2], &bx, &by);
-        float dx = bx - ax, dy = by - ay, len = sqrtf(dx * dx + dy * dy);
-        float ext = 26 / len;
-        thick_line(ax - dx * ext, ay - dy * ext, bx + dx * ext, by + dy * ext, 7, COL_WIN);
-    }
-    fb_flush();
+    gfx_text(x1 - gfx_text_w(s, scale), y, s, scale, c);
 }
 
 /* Power, porch and gamma setup for 1.54" 240x240 ST7789V2 IPS modules (values from the
@@ -276,10 +275,8 @@ esp_err_t display_init(void)
     esp_lcd_panel_disp_on_off(s_panel, true);
     vTaskDelay(pdMS_TO_TICKS(20));
 
-    memset(s_fb, 0, SCREEN_W * CHUNK_LINES * sizeof(uint16_t));
-    for (int y = 0; y < SCREEN_H; y += CHUNK_LINES) {
-        push_rows(y, s_fb, CHUNK_LINES);
-    }
+    memset(s_fb, 0, SCREEN_W * SCREEN_H * sizeof(uint16_t));
+    display_flush();
     gpio_set_level(LCD_BL, 1);
     return ESP_OK;
 }
