@@ -193,6 +193,31 @@ void display_render(const view_t *v)
     fb_flush();
 }
 
+/* Power, porch and gamma setup for 1.54" 240x240 ST7789V2 IPS modules (values from the
+ * datasheet ranges, as used by the module vendors); the driver's own init only wakes the
+ * chip and sets the pixel format. */
+static void st7789v2_tune(esp_lcd_panel_io_handle_t io)
+{
+    static const struct {
+        uint8_t cmd, len, data[14];
+    } SEQ[] = {
+        {0xB2, 5, {0x0C, 0x0C, 0x00, 0x33, 0x33}}, /* PORCTRL */
+        {0xB7, 1, {0x35}},                         /* GCTRL: VGH 13.26 V, VGL -10.43 V */
+        {0xBB, 1, {0x19}},                         /* VCOMS 0.725 V */
+        {0xC0, 1, {0x2C}},                         /* LCMCTRL */
+        {0xC2, 1, {0x01}},                         /* VDVVRHEN */
+        {0xC3, 1, {0x12}},                         /* VRHS 4.45 V */
+        {0xC4, 1, {0x20}},                         /* VDVS 0 V */
+        {0xC6, 1, {0x0F}},                         /* FRCTRL2: 60 Hz */
+        {0xD0, 2, {0xA4, 0xA1}},                   /* PWCTRL1 */
+        {0xE0, 14, {0xD0, 0x04, 0x0D, 0x11, 0x13, 0x2B, 0x3F, 0x54, 0x4C, 0x18, 0x0D, 0x0B, 0x1F, 0x23}},
+        {0xE1, 14, {0xD0, 0x04, 0x0C, 0x11, 0x13, 0x2C, 0x3F, 0x44, 0x51, 0x2F, 0x1F, 0x1F, 0x20, 0x23}},
+    };
+    for (size_t i = 0; i < sizeof(SEQ) / sizeof(SEQ[0]); i++) {
+        esp_lcd_panel_io_tx_param(io, SEQ[i].cmd, SEQ[i].data, SEQ[i].len);
+    }
+}
+
 esp_err_t display_init(void)
 {
     /* backlight off until the first frame is on the glass */
@@ -223,7 +248,7 @@ esp_err_t display_init(void)
     esp_lcd_panel_io_spi_config_t io_cfg = {
         .dc_gpio_num = LCD_DC,
         .cs_gpio_num = LCD_CS,
-        .pclk_hz = 40 * 1000 * 1000,
+        .pclk_hz = 26 * 1000 * 1000, /* SPI through the GPIO matrix and the FPC: stay well inside spec */
         .lcd_cmd_bits = 8,
         .lcd_param_bits = 8,
         .spi_mode = 0,
@@ -246,8 +271,10 @@ esp_err_t display_init(void)
     }
     esp_lcd_panel_reset(s_panel);
     esp_lcd_panel_init(s_panel);
+    st7789v2_tune(io);
     esp_lcd_panel_invert_color(s_panel, true); /* IPS panels need inverted colours */
     esp_lcd_panel_disp_on_off(s_panel, true);
+    vTaskDelay(pdMS_TO_TICKS(20));
 
     memset(s_fb, 0, SCREEN_W * CHUNK_LINES * sizeof(uint16_t));
     for (int y = 0; y < SCREEN_H; y += CHUNK_LINES) {
