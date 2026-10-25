@@ -407,6 +407,9 @@ bool net_init(void)
     if (esp_wifi_start() != ESP_OK) {
         return false;
     }
+    /* full TX power (20 dBm) bursts can sag the board's 3.3 V rail and drop the USB
+     * serial link while joining; 11 dBm (units of 0.25 dBm) is plenty for a nearby AP */
+    esp_wifi_set_max_tx_power(44);
 
     http_start();
     s_q = xQueueCreate(4, sizeof(net_cmd_t));
