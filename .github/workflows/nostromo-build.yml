@@ -1,0 +1,149 @@
+name: NOSTROMO Firmware Build
+run-name: NOSTROMO build ${{ inputs.nostromo_build_id }} · ${{ inputs.adapter }} · ${{ inputs.target }}
+on:
+  workflow_dispatch:
+    inputs:
+      nostromo_build_id:
+        description: NOSTROMO build correlation ID
+        required: true
+        type: string
+      adapter:
+        description: Firmware build toolchain
+        required: true
+        type: choice
+        options:
+          - esp_idf
+          - platformio
+      target:
+        description: ESP-IDF chip or PlatformIO environment
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: nostromo-build-${{ github.repository }}-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  esp-idf:
+    if: inputs.adapter == 'esp_idf'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    container:
+      image: espressif/idf:v5.4.2
+    steps:
+      - name: Checkout committed firmware
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Trust the checked-out repository
+        shell: bash
+        # The checkout belongs to the runner user, but the build container runs as
+        # root: without this, git (and ESP-IDF's version lookup) refuse the repository.
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - name: Restore compiler cache
+        # ESP-IDF itself is recompiled on every run without it; with it, only changed files are.
+        uses: actions/cache@v4
+        with:
+          path: .ccache
+          # Keyed on the configuration, not the commit: ESP-IDF's own objects (most of the cache)
+          # only change with it, and an exact hit skips saving the cache again after the build.
+          key: ccache-idf5.4.2-${{ inputs.target }}-${{ hashFiles('source/sdkconfig', 'source/sdkconfig.defaults*', 'source/**/idf_component.yml') }}
+          restore-keys: ccache-idf5.4.2-${{ inputs.target }}-
+      - name: Build native ESP-IDF firmware
+        shell: bash
+        env:
+          TARGET: ${{ inputs.target }}
+          IDF_CCACHE_ENABLE: '1'
+          CCACHE_DIR: ${{ github.workspace }}/.ccache
+          CCACHE_MAXSIZE: 400M
+          CCACHE_BASEDIR: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          test -f source/CMakeLists.txt || { echo 'Missing source/CMakeLists.txt'; exit 2; }
+          . /opt/esp/idf/export.sh >/dev/null
+          # The app version is the commit (12 characters): over-the-air flashing checks the board reports it.
+          echo "${GITHUB_SHA:0:12}" > source/version.txt
+          idf.py -C source set-target "$TARGET" build
+          ccache -s || true
+      - name: Package binaries and build evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/build
+          # Only what flashing and debugging need: the images listed in flasher_args.json,
+          # that file, the ELF and the project description (not the intermediate objects).
+          python3 - <<'PY'
+          import json, pathlib, shutil
+          build = pathlib.Path('source/build'); out = pathlib.Path('artifacts/build')
+          args = json.loads((build / 'flasher_args.json').read_text())
+          files = {'flasher_args.json', 'project_description.json', *args.get('flash_files', {}).values()}
+          files |= {p.name for p in build.glob('*.elf')}
+          for name in sorted(files):
+              src = build / name
+              if src.is_file():
+                  (out / name).parent.mkdir(parents=True, exist_ok=True)
+                  shutil.copy2(src, out / name)
+          PY
+          echo "$GITHUB_SHA" > artifacts/source-commit.txt
+          . /opt/esp/idf/export.sh >/dev/null
+          idf.py --version > artifacts/toolchain-version.txt
+          (cd artifacts && find . -type f -print0 | sort -z | xargs -0 -r sha256sum > SHA256SUMS)
+      - name: Upload firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: nostromo-firmware-${{ inputs.nostromo_build_id }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 30
+  platformio:
+    if: inputs.adapter == 'platformio'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Checkout committed firmware
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Restore PlatformIO packages
+        # Platforms and toolchains are downloaded on every run without it.
+        uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: platformio-6.1.18-${{ hashFiles('source/platformio.ini') }}
+          restore-keys: platformio-6.1.18-
+      - name: Install pinned PlatformIO CLI
+        run: python -m pip install 'platformio==6.1.18'
+      - name: Compile selected PlatformIO environment
+        shell: bash
+        env:
+          TARGET: ${{ inputs.target }}
+          # Firmware reports NOSTROMO_VERSION (the commit) on GET /nostromo/version for over-the-air flashing.
+          PLATFORMIO_BUILD_FLAGS: -DNOSTROMO_VERSION=\"${{ github.sha }}\"
+        run: |
+          set -euo pipefail
+          test -f source/platformio.ini || { echo 'Missing source/platformio.ini'; exit 2; }
+          python -m platformio run --project-dir source -e "$TARGET"
+      - name: Package build output and evidence
+        shell: bash
+        env:
+          TARGET: ${{ inputs.target }}
+        run: |
+          set -euo pipefail
+          test -d "source/.pio/build/$TARGET"
+          mkdir -p artifacts/build
+          find "source/.pio/build/$TARGET" -maxdepth 1 -type f \( -name '*.elf' -o -name '*.bin' -o -name '*.hex' -o -name '*.uf2' \) -exec cp {} artifacts/build/ \;
+          test -n "$(find artifacts/build -type f -print -quit)" || { echo 'No expected firmware output'; exit 2; }
+          echo "$GITHUB_SHA" > artifacts/source-commit.txt
+          python -m platformio --version > artifacts/toolchain-version.txt
+          (cd artifacts && find . -type f -print0 | sort -z | xargs -0 -r sha256sum > SHA256SUMS)
+      - name: Upload firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: nostromo-firmware-${{ inputs.nostromo_build_id }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 30

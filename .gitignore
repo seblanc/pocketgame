@@ -1,0 +1,6 @@
+source/build/
+source/sdkconfig
+source/sdkconfig.old
+source/version.txt
+source/managed_components/
+source/dependencies.lock
