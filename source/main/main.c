@@ -5,15 +5,26 @@
  *   play <0-8>   -> MOVE X 4, BOARD ..., then TURN O | WIN X line=a,b,c | DRAW
  *                   or ERR occupied | ERR game over | ERR bad cell
  *   board        -> BOARD ... and the current state
- * Touch moves and button presses print the same lines. */
+ *   bl           -> BL gpio=<n> on=<0|1> option=<i>/<count> searching=<0|1>
+ *   bl next | bl ok | bl search | bl <gpio> <0|1>   backlight search by hand
+ *   forget       -> drops the saved display and backlight pins and restarts
+ * Touch moves and button presses print the same lines.
+ *
+ * Until a backlight option is confirmed, the firmware switches to the next
+ * candidate pin every few seconds; the first tap (or the BOOT button) on the lit
+ * screen saves it. Holding a finger on the screen for 3 s starts the search again. */
 #include <ctype.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "backlight.h"
 #include "board.h"
 #include "display.h"
 #include "driver/gpio.h"
+#include "esp_log.h"
+#include "esp_system.h"
+#include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
@@ -24,6 +35,7 @@
 
 static SemaphoreHandle_t s_lock;
 static TaskHandle_t s_display_task;
+static TaskHandle_t s_bl_task;
 static view_t s_view;
 static board_t s_board;
 
@@ -117,6 +129,74 @@ static void app_play(int cell, const char *src)
     }
 }
 
+static bool calibrating(void)
+{
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    bool c = s_view.calibrating;
+    xSemaphoreGive(s_lock);
+    return c;
+}
+
+static void print_bl_locked(void)
+{
+    int pin, on, idx, n;
+    backlight_current(&pin, &on, &idx, &n);
+    out("BL gpio=%d on=%d option=%d/%d searching=%d", pin, on, idx + 1, n, s_view.calibrating);
+}
+
+/* the lit screen was seen: keep this backlight option */
+static void bl_confirm(const char *src)
+{
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    s_view.calibrating = false;
+    backlight_confirm();
+    int pin, on, idx, n;
+    backlight_current(&pin, &on, &idx, &n);
+    out("BL confirmed gpio=%d on=%d src=%s", pin, on, src);
+    xSemaphoreGive(s_lock);
+    sound_play(SND_NEW);
+    request_redraw();
+}
+
+static void bl_search(const char *src)
+{
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    s_view.calibrating = true;
+    backlight_forget();
+    out("BL search started src=%s: tap the screen once it lights up", src);
+    xSemaphoreGive(s_lock);
+    if (s_bl_task) {
+        xTaskNotifyGive(s_bl_task);
+    }
+    request_redraw();
+}
+
+static void handle_bl(const char *arg)
+{
+    int pin, on;
+    if (*arg == '\0') {
+        xSemaphoreTake(s_lock, portMAX_DELAY);
+        print_bl_locked();
+        xSemaphoreGive(s_lock);
+    } else if (strcmp(arg, "next") == 0) {
+        xSemaphoreTake(s_lock, portMAX_DELAY);
+        backlight_next();
+        print_bl_locked();
+        xSemaphoreGive(s_lock);
+    } else if (strcmp(arg, "ok") == 0) {
+        bl_confirm("uart");
+    } else if (strcmp(arg, "search") == 0) {
+        bl_search("uart");
+    } else if (sscanf(arg, "%d %d", &pin, &on) == 2 && pin >= 0 && pin <= 48) {
+        xSemaphoreTake(s_lock, portMAX_DELAY);
+        backlight_set(pin, on);
+        print_bl_locked();
+        xSemaphoreGive(s_lock);
+    } else {
+        out("ERR bl (bl | bl next | bl ok | bl search | bl <gpio> <0|1>)");
+    }
+}
+
 static void handle_line(char *line)
 {
     while (isspace((unsigned char)*line)) {
@@ -145,8 +225,20 @@ static void handle_line(char *line)
         print_state_locked();
         out("SCORE X=%d O=%d", s_view.wins_x, s_view.wins_o);
         xSemaphoreGive(s_lock);
+    } else if (strcmp(line, "bl") == 0 || strncmp(line, "bl ", 3) == 0) {
+        const char *arg = line + 2;
+        while (*arg == ' ') {
+            arg++;
+        }
+        handle_bl(arg);
+    } else if (strcmp(line, "forget") == 0) {
+        board_forget_lcd();
+        backlight_forget();
+        out("FORGET restarting");
+        vTaskDelay(pdMS_TO_TICKS(100));
+        esp_restart();
     } else {
-        out("ERR unknown command (new | play <0-8> | board)");
+        out("ERR unknown command (new | play <0-8> | board | bl | forget)");
     }
 }
 
@@ -193,21 +285,61 @@ static void display_task(void *arg)
 
 static void touch_task(void *arg)
 {
+    TickType_t down_at = 0;
+    bool held = false;
     for (;;) {
         int x, y;
         if (touch_poll_press(&x, &y)) {
+            down_at = xTaskGetTickCount();
+            held = false;
             int cell = display_cell_at(x, y);
             out("TAP x=%d y=%d cell=%d", x, y, cell);
             xSemaphoreTake(s_lock, portMAX_DELAY);
+            bool cal = s_view.calibrating;
             bool over = s_view.game.status != GAME_PLAYING;
             xSemaphoreGive(s_lock);
-            if (over) {
+            if (cal) {
+                bl_confirm("touch");
+            } else if (over) {
                 app_new_game("touch");
             } else if (cell >= 0) {
                 app_play(cell, "touch");
             }
+        } else if (touch_is_down() && !held && xTaskGetTickCount() - down_at >= pdMS_TO_TICKS(3000)) {
+            held = true;
+            bl_search("hold");
         }
         vTaskDelay(pdMS_TO_TICKS(20));
+    }
+}
+
+/* Runs the slow I2C scan off the boot path, then the backlight search whenever
+ * it is active: one candidate every few seconds until a tap confirms it. */
+static void bl_task(void *arg)
+{
+    int pin, on, idx, n;
+    backlight_current(&pin, &on, &idx, &n);
+    board_scan_i2c(&s_board, PIN_BIT(pin));
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    backlight_exclude(s_board.i2c_pins); /* bus lines are never the backlight */
+    xSemaphoreGive(s_lock);
+    for (;;) {
+        if (!calibrating()) {
+            ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+            continue;
+        }
+        xSemaphoreTake(s_lock, portMAX_DELAY);
+        backlight_current(&pin, &on, &idx, &n);
+        out("DIAG backlight try gpio=%d on=%d option=%d/%d", pin, on, idx + 1, n);
+        xSemaphoreGive(s_lock);
+        for (int t = 0; t < 50 && calibrating(); t++) {
+            vTaskDelay(pdMS_TO_TICKS(50));
+        }
+        xSemaphoreTake(s_lock, portMAX_DELAY);
+        if (s_view.calibrating) {
+            backlight_next();
+        }
+        xSemaphoreGive(s_lock);
     }
 }
 
@@ -248,7 +380,11 @@ static void button_task(void *arg)
             }
             if (v == 0 && last[i] == 1) {
                 out("BTN gpio=%d", pins[i]);
-                app_new_game("button");
+                if (calibrating()) {
+                    bl_confirm("button");
+                } else {
+                    app_new_game("button");
+                }
             }
             last[i] = v;
         }
@@ -259,6 +395,12 @@ void app_main(void)
 {
     s_lock = xSemaphoreCreateMutex();
     game_new(&s_view.game);
+    esp_log_level_set("gpio", ESP_LOG_WARN); /* pin probing reconfigures hundreds of pins */
+    esp_err_t err = nvs_flash_init();
+    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        nvs_flash_erase();
+        nvs_flash_init();
+    }
 
     /* give the host time to reopen the USB serial port after a reset */
     vTaskDelay(pdMS_TO_TICKS(1500));
@@ -267,12 +409,31 @@ void app_main(void)
     board_detect(&s_board);
     const board_profile_t *p = s_board.profile;
 
-    esp_err_t err = display_init(p);
-    if (err == ESP_OK) {
-        out("LCD OK profile=%s id=0x%06lx %s", p->name, (unsigned long)s_board.lcd_id,
-            s_board.lcd_detected ? "detected" : "unverified-default");
-    } else {
+    err = display_init(p);
+    if (err != ESP_OK) {
         out("LCD FAIL profile=%s err=%s", p->name, esp_err_to_name(err));
+    } else if (s_board.lcd_detected) {
+        out("LCD OK profile=%s src=%s id=0x%06lx verified sclk=%d sda=%d cs=%d dc=%d rst=%d", p->name,
+            s_board.lcd_source, (unsigned long)s_board.lcd_id, p->lcd_sclk, p->lcd_mosi, p->lcd_cs,
+            p->lcd_dc, p->lcd_rst);
+    } else {
+        out("LCD UNVERIFIED profile=%s: no display answered its ID read, using a guess", p->name);
+    }
+
+    uint64_t busy = board_lcd_mask(p);
+    for (int i = 0; i < 3; i++) {
+        busy |= PIN_BIT(p->buttons[i]);
+    }
+    if (s_board.touch.kind != TOUCH_NONE) {
+        busy |= PIN_BIT(s_board.touch.sda) | PIN_BIT(s_board.touch.scl) | PIN_BIT(s_board.touch.rst);
+    }
+    bool bl_saved = backlight_init(&s_board, busy);
+    s_view.calibrating = !bl_saved;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    print_bl_locked();
+    xSemaphoreGive(s_lock);
+    if (!bl_saved) {
+        out("BL search: tap the screen or press BOOT once it lights up");
     }
 
     if (touch_init(&s_board.touch)) {
@@ -290,4 +451,5 @@ void app_main(void)
 
     out("READY turn=X");
     xTaskCreate(console_task, "console", 4096, NULL, 6, NULL);
+    xTaskCreate(bl_task, "backlight", 4096, NULL, 2, &s_bl_task);
 }

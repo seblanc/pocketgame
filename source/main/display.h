@@ -14,6 +14,7 @@
 typedef struct {
     game_t game;
     int wins_x, wins_o;
+    bool calibrating; /* backlight search running: the next tap confirms the lit screen */
 } view_t;
 
 esp_err_t display_init(const board_profile_t *p);

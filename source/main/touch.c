@@ -73,6 +73,8 @@ static bool read_point(int *n, int *x, int *y)
     }
 }
 
+bool touch_is_down(void) { return s_down; }
+
 bool touch_poll_press(int *x, int *y)
 {
     int n = 0, px = 0, py = 0;

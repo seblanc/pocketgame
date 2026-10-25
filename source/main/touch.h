@@ -6,3 +6,5 @@
 bool touch_init(const touch_info_t *t);
 /* Polls once; true with the coordinates on a new press (finger down edge). */
 bool touch_poll_press(int *x, int *y);
+/* Finger on the glass at the last poll. */
+bool touch_is_down(void);

@@ -3,12 +3,15 @@
 #include <string.h>
 #include "bbi2c.h"
 #include "driver/gpio.h"
-#include "driver/spi_master.h"
 #include "esp_rom_sys.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "lcdscan.h"
+#include "nvs.h"
 
 #define B3(a, b, c) {a, b, c}
+#define NVS_NS "board"
+#define NVS_KEY_LCD "lcd1" /* bump when board_profile_t changes */
 
 static const board_profile_t PROFILES[] = {
     {
@@ -32,13 +35,14 @@ static const board_profile_t PROFILES[] = {
         .buttons = B3(0, NO_PIN, NO_PIN),
     },
     {
-        /* Waveshare ESP32-S3-Touch-LCD-1.69 family wiring (CST816 touch, buzzer) */
+        /* Waveshare ESP32-S3-Touch-LCD-1.69 family wiring (CST816 touch); the
+         * board found so far has its touch chip on exactly these pins */
         .name = "ws169",
         .lcd_mosi = 7, .lcd_sclk = 6, .lcd_cs = 5, .lcd_dc = 4, .lcd_rst = 8, .lcd_bl = 15, .bl_on = 1,
-        .lcd_w = 240, .lcd_h = 280, .gap_y = 20, .invert = true,
+        .lcd_w = 240, .lcd_h = 240, .invert = true,
         .tp_sda = 11, .tp_scl = 10, .tp_rst = 13,
         .i2s_bclk = NO_PIN, .i2s_ws = NO_PIN, .i2s_dout = NO_PIN, .amp_en = NO_PIN,
-        .buzzer = 42,
+        .buzzer = NO_PIN, /* GPIO42 is an I2C bus (audio codec) on this board */
         .buttons = B3(0, NO_PIN, NO_PIN),
     },
     {
@@ -54,6 +58,18 @@ static const board_profile_t PROFILES[] = {
 };
 #define NPROFILES (sizeof(PROFILES) / sizeof(PROFILES[0]))
 #define DEFAULT_PROFILE 0
+
+/* a pin map found by the search: geometry and extras of a plain 1.54" board */
+static const board_profile_t SEARCHED = {
+    .name = "search",
+    .lcd_mosi = NO_PIN, .lcd_sclk = NO_PIN, .lcd_cs = NO_PIN, .lcd_dc = NO_PIN, .lcd_rst = NO_PIN,
+    .lcd_bl = NO_PIN, .bl_on = 1,
+    .lcd_w = 240, .lcd_h = 240, .invert = true,
+    .tp_sda = NO_PIN, .tp_scl = NO_PIN, .tp_rst = NO_PIN,
+    .i2s_bclk = NO_PIN, .i2s_ws = NO_PIN, .i2s_dout = NO_PIN, .amp_en = NO_PIN,
+    .buzzer = NO_PIN,
+    .buttons = B3(0, NO_PIN, NO_PIN),
+};
 
 /* GPIOs a scan may touch: not USB (19/20), flash or PSRAM (26..37). */
 static const int SCAN_PINS[] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17,
@@ -102,93 +118,82 @@ static void drive(int pin, int level)
     }
 }
 
-/* Reads the ST7789 display ID (RDDID 04h) over the bidirectional SDA line. */
-static uint32_t lcd_read_id(const board_profile_t *p)
+uint64_t board_lcd_mask(const board_profile_t *p)
 {
-    spi_bus_config_t bus = {
-        .mosi_io_num = p->lcd_mosi,
-        .miso_io_num = -1,
-        .sclk_io_num = p->lcd_sclk,
-        .quadwp_io_num = -1,
-        .quadhd_io_num = -1,
-        .max_transfer_sz = 16,
-    };
-    if (spi_bus_initialize(SPI2_HOST, &bus, SPI_DMA_DISABLED) != ESP_OK) {
-        return 0;
+    uint64_t m = PIN_BIT(p->lcd_mosi) | PIN_BIT(p->lcd_sclk) | PIN_BIT(p->lcd_cs) | PIN_BIT(p->lcd_dc) |
+                 PIN_BIT(p->lcd_rst);
+    for (int i = 0; i < p->n_hold_lo; i++) {
+        m |= PIN_BIT(p->hold_lo[i]);
     }
-    spi_device_interface_config_t dev = {
-        .mode = 0,
-        .clock_speed_hz = 1000000,
-        .spics_io_num = p->lcd_cs,
-        .queue_size = 1,
-        .flags = SPI_DEVICE_3WIRE | SPI_DEVICE_HALFDUPLEX,
-    };
-    spi_device_handle_t h;
-    if (spi_bus_add_device(SPI2_HOST, &dev, &h) != ESP_OK) {
-        spi_bus_free(SPI2_HOST);
-        return 0;
+    for (int i = 0; i < p->n_hold_hi; i++) {
+        m |= PIN_BIT(p->hold_hi[i]);
     }
-    /* an unconnected line then reads as all ones and is rejected */
-    gpio_set_pull_mode(p->lcd_mosi, GPIO_PULLUP_ONLY);
-    drive(p->lcd_dc, 0);
-
-    if (p->lcd_rst >= 0) {
-        drive(p->lcd_rst, 0);
-        vTaskDelay(pdMS_TO_TICKS(10));
-        gpio_set_level(p->lcd_rst, 1);
-    } else {
-        spi_transaction_t sw = {.flags = SPI_TRANS_USE_TXDATA, .length = 8, .tx_data = {0x01}};
-        spi_device_polling_transmit(h, &sw);
-    }
-    vTaskDelay(pdMS_TO_TICKS(130));
-
-    uint32_t id = 0xFFFFFF;
-    for (int attempt = 0; attempt < 2; attempt++) {
-        spi_transaction_t t = {
-            .flags = SPI_TRANS_USE_TXDATA | SPI_TRANS_USE_RXDATA,
-            .length = 8,
-            .rxlength = 32,
-            .tx_data = {0x04},
-        };
-        if (spi_device_polling_transmit(h, &t) != ESP_OK) {
-            id = 0;
-            break;
-        }
-        uint32_t raw = ((uint32_t)t.rx_data[0] << 24) | ((uint32_t)t.rx_data[1] << 16) |
-                       ((uint32_t)t.rx_data[2] << 8) | t.rx_data[3];
-        /* one dummy clock precedes the three ID bytes */
-        uint32_t v = (raw >> 7) & 0xFFFFFF;
-        if (attempt > 0 && v != id) {
-            id = 0; /* unstable: not a real answer */
-            break;
-        }
-        id = v;
-    }
-
-    spi_bus_remove_device(h);
-    spi_bus_free(SPI2_HOST);
-    release_pin(p->lcd_mosi);
-    release_pin(p->lcd_sclk);
-    release_pin(p->lcd_cs);
-    release_pin(p->lcd_dc);
-    release_pin(p->lcd_rst);
-    return id;
+    return m;
 }
 
-static bool pins_overlap_lcd(const board_profile_t *lcd, const int *pins, int n)
+static uint64_t touch_mask(const touch_info_t *t)
 {
-    if (!lcd) {
+    return t->kind == TOUCH_NONE ? 0 : PIN_BIT(t->sda) | PIN_BIT(t->scl) | PIN_BIT(t->rst);
+}
+
+static bool load_lcd(board_profile_t *p)
+{
+    nvs_handle_t h;
+    if (nvs_open(NVS_NS, NVS_READONLY, &h) != ESP_OK) {
         return false;
     }
-    const int lp[] = {lcd->lcd_mosi, lcd->lcd_sclk, lcd->lcd_cs, lcd->lcd_dc, lcd->lcd_rst, lcd->lcd_bl};
-    for (int i = 0; i < n; i++) {
-        for (int j = 0; j < 6; j++) {
-            if (pins[i] >= 0 && pins[i] == lp[j]) {
-                return true;
+    size_t len = sizeof(*p);
+    bool ok = nvs_get_blob(h, NVS_KEY_LCD, p, &len) == ESP_OK && len == sizeof(*p);
+    nvs_close(h);
+    p->name = "saved";
+    return ok;
+}
+
+static void save_lcd(const board_profile_t *p)
+{
+    nvs_handle_t h;
+    if (nvs_open(NVS_NS, NVS_READWRITE, &h) == ESP_OK) {
+        nvs_set_blob(h, NVS_KEY_LCD, p, sizeof(*p));
+        nvs_commit(h);
+        nvs_close(h);
+    }
+}
+
+void board_forget_lcd(void)
+{
+    nvs_handle_t h;
+    if (nvs_open(NVS_NS, NVS_READWRITE, &h) == ESP_OK) {
+        nvs_erase_key(h, NVS_KEY_LCD);
+        nvs_commit(h);
+        nvs_close(h);
+    }
+}
+
+/* Level of every free pin with only the internal pull-up: lines that read low
+ * are held down by something on the board (a pull-down, another chip). */
+static uint64_t survey_pins(void)
+{
+    for (size_t i = 0; i < NSCAN; i++) {
+        gpio_reset_pin(SCAN_PINS[i]);
+        gpio_set_direction(SCAN_PINS[i], GPIO_MODE_INPUT);
+        gpio_set_pull_mode(SCAN_PINS[i], GPIO_PULLUP_ONLY);
+    }
+    esp_rom_delay_us(500);
+    uint64_t low = 0;
+    char buf[160];
+    int pos = 0;
+    for (size_t i = 0; i < NSCAN; i++) {
+        if (!gpio_get_level(SCAN_PINS[i])) {
+            low |= PIN_BIT(SCAN_PINS[i]);
+            if (pos < (int)sizeof(buf) - 6) {
+                pos += snprintf(buf + pos, sizeof(buf) - pos, " %d", SCAN_PINS[i]);
             }
         }
+        gpio_reset_pin(SCAN_PINS[i]);
     }
-    return false;
+    buf[pos] = '\0';
+    printf("DIAG gpio low with pull-up:%s\n", pos ? buf : " none");
+    return low;
 }
 
 static bool probe_profile_touch(const board_profile_t *p, touch_info_t *t)
@@ -227,38 +232,28 @@ static bool probe_profile_touch(const board_profile_t *p, touch_info_t *t)
 }
 
 /* Tries every free pin pair as SDA/SCL and reports each bus with devices on it.
- * Lines are only ever pulled low (open drain), never driven high. */
-static void scan_all_i2c(const board_profile_t *lcd, touch_info_t *t)
+ * Lines are only ever pulled low (open drain), never driven high. Takes seconds,
+ * so it runs in the background and yields between pairs. */
+void board_scan_i2c(board_t *bd, uint64_t busy)
 {
-    int pins[NSCAN];
-    int n = 0;
-    char idle[160];
-    int pos = 0;
-    for (size_t i = 0; i < NSCAN; i++) {
-        int pin = SCAN_PINS[i];
-        if (pins_overlap_lcd(lcd, &pin, 1)) {
-            continue;
-        }
-        bbi2c_setup_pin(pin);
-        pins[n++] = pin;
+    busy |= board_lcd_mask(bd->profile) | touch_mask(&bd->touch) | PIN_BIT(0);
+    for (int i = 0; i < 3; i++) {
+        busy |= PIN_BIT(bd->profile->buttons[i]);
     }
-    esp_rom_delay_us(200);
     int hi[NSCAN];
     int nhi = 0;
-    for (int i = 0; i < n; i++) {
-        int lvl = gpio_get_level(pins[i]);
-        if (lvl) {
-            hi[nhi++] = pins[i];
-        } else if (pos < (int)sizeof(idle) - 6) {
-            pos += snprintf(idle + pos, sizeof(idle) - pos, " %d", pins[i]);
+    for (size_t i = 0; i < NSCAN; i++) {
+        int pin = SCAN_PINS[i];
+        if (!(busy & PIN_BIT(pin)) && !(bd->idle_low & PIN_BIT(pin))) {
+            bbi2c_setup_pin(pin);
+            hi[nhi++] = pin;
         }
     }
-    idle[pos] = '\0';
-    printf("DIAG gpio low with pull-up:%s\n", pos ? idle : " none");
 
     int buses = 0;
     TickType_t t0 = xTaskGetTickCount();
     for (int i = 0; i < nhi; i++) {
+        vTaskDelay(1);
         for (int j = 0; j < nhi; j++) {
             if (i == j) {
                 continue;
@@ -273,15 +268,11 @@ static void scan_all_i2c(const board_profile_t *lcd, touch_info_t *t)
             }
             char devs[200];
             int dp = 0, count = 0;
-            uint8_t first_touch = 0;
             for (uint8_t a = 0x08; a < 0x78; a++) {
                 if (bbi2c_probe(&b, a)) {
                     count++;
                     if (dp < (int)sizeof(devs) - 6) {
                         dp += snprintf(devs + dp, sizeof(devs) - dp, " 0x%02x", a);
-                    }
-                    if (!first_touch && kind_for_addr(a) != TOUCH_NONE) {
-                        first_touch = a;
                     }
                 }
             }
@@ -290,59 +281,99 @@ static void scan_all_i2c(const board_profile_t *lcd, touch_info_t *t)
                 continue; /* stuck or bogus line, not a bus */
             }
             buses++;
+            bd->i2c_pins |= PIN_BIT(b.sda) | PIN_BIT(b.scl);
             printf("DIAG i2c bus sda=%d scl=%d devices:%s\n", b.sda, b.scl, devs);
-            if (first_touch && t->kind == TOUCH_NONE) {
-                t->kind = kind_for_addr(first_touch);
-                t->addr = first_touch;
-                t->sda = b.sda;
-                t->scl = b.scl;
-                t->rst = NO_PIN;
-            }
         }
     }
     printf("DIAG i2c scan done: %d bus(es) in %lu ms\n", buses,
            (unsigned long)((xTaskGetTickCount() - t0) * portTICK_PERIOD_MS));
-    for (int i = 0; i < n; i++) {
-        gpio_reset_pin(pins[i]);
+    for (int i = 0; i < nhi; i++) {
+        gpio_reset_pin(hi[i]);
     }
 }
+
+static void print_probe(const char *name, uint32_t id)
+{
+    bool ok = id != 0 && id != 0xFFFFFF;
+    printf("DIAG lcdprobe profile=%s id=0x%06lx%s\n", name, (unsigned long)id, ok ? " match" : "");
+}
+
+static bool id_ok(uint32_t id) { return id != 0 && id != 0xFFFFFF; }
 
 void board_detect(board_t *out)
 {
     memset(out, 0, sizeof(*out));
+    out->profile = &out->prof;
     out->touch.kind = TOUCH_NONE;
     out->touch.sda = out->touch.scl = out->touch.rst = NO_PIN;
 
-    /* 1. which pin map has a display answering? */
-    const board_profile_t *lcd = NULL;
-    for (size_t i = 0; i < NPROFILES; i++) {
-        uint32_t id = lcd_read_id(&PROFILES[i]);
-        bool ok = id != 0 && id != 0xFFFFFF;
-        printf("DIAG lcdprobe profile=%s id=0x%06lx%s\n", PROFILES[i].name, (unsigned long)id,
-               ok ? " match" : "");
-        if (ok && !lcd) {
-            lcd = &PROFILES[i];
-            out->lcd_id = id;
+    out->idle_low = survey_pins();
+
+    /* 1. touch controller on a known bus: its pins are then off limits for the display */
+    const board_profile_t *touch_profile = NULL;
+    for (size_t i = 0; i < NPROFILES && !touch_profile; i++) {
+        if (probe_profile_touch(&PROFILES[i], &out->touch)) {
+            touch_profile = &PROFILES[i];
         }
     }
-    out->lcd_detected = lcd != NULL;
+    uint64_t tmask = touch_mask(&out->touch);
 
-    /* 2. touch controller on a known bus, else anywhere */
-    const board_profile_t *touch_profile = NULL;
-    for (size_t i = 0; i < NPROFILES && out->touch.kind == TOUCH_NONE; i++) {
-        const board_profile_t *p = &PROFILES[i];
-        int tp[] = {p->tp_sda, p->tp_scl, p->tp_rst};
-        if (pins_overlap_lcd(lcd, tp, 3)) {
+    /* 2. display: pins saved by an earlier search, then the known maps, then a search */
+    board_profile_t p;
+    if (load_lcd(&p) && !(board_lcd_mask(&p) & tmask)) {
+        uint32_t id = lcdscan_read_id(&p);
+        print_probe(p.name, id);
+        if (id_ok(id)) {
+            out->prof = p;
+            out->lcd_id = id;
+            out->lcd_detected = true;
+            out->lcd_source = "saved";
+        }
+    }
+    for (size_t i = 0; i < NPROFILES && !out->lcd_detected; i++) {
+        if (board_lcd_mask(&PROFILES[i]) & tmask) {
+            printf("DIAG lcdprobe profile=%s skipped (touch pins)\n", PROFILES[i].name);
             continue;
         }
-        if (probe_profile_touch(p, &out->touch)) {
-            touch_profile = p;
+        uint32_t id = lcdscan_read_id(&PROFILES[i]);
+        print_probe(PROFILES[i].name, id);
+        if (id_ok(id)) {
+            out->prof = PROFILES[i];
+            out->lcd_id = id;
+            out->lcd_detected = true;
+            out->lcd_source = "profile";
         }
     }
-    scan_all_i2c(lcd, &out->touch);
-
-    if (!lcd) {
-        lcd = touch_profile ? touch_profile : &PROFILES[DEFAULT_PROFILE];
+    if (!out->lcd_detected) {
+        int cand[NSCAN];
+        bool idle_high[NSCAN];
+        int n = 0;
+        for (size_t i = 0; i < NSCAN; i++) {
+            int pin = SCAN_PINS[i];
+            if (pin == 0 || (tmask & PIN_BIT(pin))) {
+                continue; /* BOOT button, touch bus */
+            }
+            cand[n] = pin;
+            idle_high[n] = !(out->idle_low & PIN_BIT(pin));
+            n++;
+        }
+        p = SEARCHED;
+        uint32_t id = lcdscan_search(cand, idle_high, n, &p);
+        if (id_ok(id)) {
+            out->prof = p;
+            out->lcd_id = id;
+            out->lcd_detected = true;
+            out->lcd_source = "search";
+            save_lcd(&p);
+        }
     }
-    out->profile = lcd;
+    if (!out->lcd_detected) {
+        out->prof = touch_profile ? *touch_profile : PROFILES[DEFAULT_PROFILE];
+        out->lcd_source = "default";
+    }
+    if (out->touch.kind != TOUCH_NONE) {
+        out->prof.tp_sda = out->touch.sda;
+        out->prof.tp_scl = out->touch.scl;
+        out->prof.tp_rst = out->touch.rst;
+    }
 }

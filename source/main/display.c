@@ -11,6 +11,7 @@
 #include "font5x7.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#include "freertos/task.h"
 
 #define CHUNK_LINES 40
 #define RGB(r, g, b) ((uint16_t)((((r) & 0xF8) << 8) | (((g) & 0xFC) << 3) | ((b) >> 3)))
@@ -148,7 +149,10 @@ void display_render(const view_t *v)
     draw_text(SCREEN_W - 4 - text_width(buf, 2), 12, buf, 2, COL_O);
 
     uint16_t tc = COL_TEXT;
-    if (g->status == GAME_WIN) {
+    if (v->calibrating) {
+        snprintf(buf, sizeof(buf), "TAP ME");
+        tc = COL_WIN;
+    } else if (g->status == GAME_WIN) {
         snprintf(buf, sizeof(buf), "%c WINS!", game_mark_char(g->winner));
         tc = g->winner == CELL_X ? COL_X : COL_O;
     } else if (g->status == GAME_DRAW) {
@@ -200,10 +204,24 @@ esp_err_t display_init(const board_profile_t *p)
         return ESP_ERR_NO_MEM;
     }
 
-    if (p->lcd_bl >= 0) {
-        gpio_reset_pin(p->lcd_bl);
-        gpio_set_direction(p->lcd_bl, GPIO_MODE_OUTPUT);
-        gpio_set_level(p->lcd_bl, !p->bl_on);
+    /* lines the panel needs at a fixed level (found by the pin search) */
+    for (int i = 0; i < p->n_hold_hi; i++) {
+        gpio_reset_pin(p->hold_hi[i]);
+        gpio_set_level(p->hold_hi[i], 0);
+        gpio_set_direction(p->hold_hi[i], GPIO_MODE_OUTPUT);
+    }
+    for (int i = 0; i < p->n_hold_lo; i++) {
+        gpio_reset_pin(p->hold_lo[i]);
+        gpio_set_level(p->hold_lo[i], 0);
+        gpio_set_direction(p->hold_lo[i], GPIO_MODE_OUTPUT);
+    }
+    if (p->n_hold_hi) {
+        /* without a single reset line, pulse all of them as one */
+        vTaskDelay(pdMS_TO_TICKS(10));
+        for (int i = 0; i < p->n_hold_hi; i++) {
+            gpio_set_level(p->hold_hi[i], 1);
+        }
+        vTaskDelay(pdMS_TO_TICKS(120));
     }
 
     spi_bus_config_t bus = {
@@ -223,7 +241,7 @@ esp_err_t display_init(const board_profile_t *p)
     esp_lcd_panel_io_spi_config_t io_cfg = {
         .dc_gpio_num = p->lcd_dc,
         .cs_gpio_num = p->lcd_cs,
-        .pclk_hz = 40 * 1000 * 1000,
+        .pclk_hz = 20 * 1000 * 1000, /* unknown board wiring: stay well inside the ST7789 limit */
         .lcd_cmd_bits = 8,
         .lcd_param_bits = 8,
         .spi_mode = 0,
@@ -258,9 +276,5 @@ esp_err_t display_init(const board_profile_t *p)
         int lines = s_panel_h - y < CHUNK_LINES ? s_panel_h - y : CHUNK_LINES;
         push_rows(y, s_fb, lines);
     }
-
-    if (p->lcd_bl >= 0) {
-        gpio_set_level(p->lcd_bl, p->bl_on);
-    }
-    return ESP_OK;
+    return ESP_OK; /* the backlight is switched by backlight.c */
 }
