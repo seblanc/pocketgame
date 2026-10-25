@@ -29,13 +29,17 @@ static bool in_rect(rect_t r, int x, int y) { return x >= r.x && y >= r.y && x <
 /* top bar (home screen only) */
 #define BAR_H 22
 
-/* home screen: one full-width tile per game */
+/* Scrolling lists: content is laid out in list coordinates (0 = top of the list) and
+ * drawn at screen y = LIST_Y0 + y - scroll, clipped to LIST_Y0..LIST_Y1. */
+#define LIST_Y1 216 /* the footer hint stays below */
+
+/* home screen: a list of full-width tiles, one per game */
+#define MENU_Y0 (BAR_H + 1)
 #define TILE_X 16
-#define TILE_Y0 58
+#define TILE_Y0 35
 #define TILE_W 208
 #define TILE_H 72
 #define TILE_GAP 8
-#define TILES_MAX 2
 
 /* tic-tac-toe grid */
 #define GRID_X0 21
@@ -49,17 +53,29 @@ static const rect_t BTN_YES = {126, 140, 94, 48};
 /* turn banner above the grid */
 static const rect_t BANNER = {56, 5, 128, 28};
 
-/* settings */
+/* settings: a list of rows below the title */
+#define SET_Y0 41
+#define ROW_VOL 0
+#define ROW_WIFI 72
+#define ROW_KEYS 156
+#define ROW_ABOUT 236
+#define SET_H 284
 #define SL_X0 24
 #define SL_X1 216
-#define SL_Y 92
-static const rect_t SLIDER_AREA = {8, 70, 224, 46};
-static const rect_t BTN_SETUP = {140, 152, 84, 32};
+#define SL_Y (ROW_VOL + 48)
+/* only the bar itself (with a finger's margin) moves the volume */
+static const rect_t SLIDER_AREA = {SL_X0 - 12, SL_Y - 12, SL_X1 - SL_X0 + 24, 24};
+static const rect_t BTN_SETUP = {140, ROW_WIFI + 10, 84, 32};
 
 /* wifi setup */
 static const rect_t BTN_DONE = {70, 192, 100, 34};
 
 static rect_t tile_rect(int i) { return (rect_t){TILE_X, TILE_Y0 + i * (TILE_H + TILE_GAP), TILE_W, TILE_H}; }
+
+static int menu_h(void) { return TILE_Y0 + GAME_COUNT * (TILE_H + TILE_GAP) - TILE_GAP + 12; }
+
+/* rect r of a list scrolled by scroll, in screen coordinates */
+static rect_t at(rect_t r, int y0, int scroll) { return (rect_t){r.x, y0 + r.y - scroll, r.w, r.h}; }
 
 static void button(rect_t r, const char *label, uint16_t c)
 {
@@ -127,9 +143,14 @@ static void ttt_icon(int x, int y, int s)
 static void draw_menu(const app_view_t *v)
 {
     draw_bar(v);
-    gfx_text(16, 34, "GAMES", 1, COL_DIM);
-    for (int i = 0; i < GAME_COUNT && i < TILES_MAX; i++) {
-        rect_t r = tile_rect(i);
+    int y0 = MENU_Y0 - v->menu_scroll;
+    gfx_clip_y(MENU_Y0, LIST_Y1);
+    gfx_text(16, y0 + 11, "GAMES", 1, COL_DIM);
+    for (int i = 0; i < GAME_COUNT; i++) {
+        rect_t r = at(tile_rect(i), MENU_Y0, v->menu_scroll);
+        if (r.y + r.h < MENU_Y0 || r.y >= LIST_Y1) {
+            continue;
+        }
         gfx_rrect(r.x, r.y, r.w, r.h, 12, COL_LINE);
         if (strcmp(GAMES[i].id, "ttt") == 0) {
             ttt_icon(r.x + 12, r.y + 12, 48);
@@ -137,6 +158,7 @@ static void draw_menu(const app_view_t *v)
         gfx_text(r.x + 72, r.y + 22, GAMES[i].title, 2, COL_TEXT);
         gfx_text(r.x + 72, r.y + 42, GAMES[i].subtitle, 1, COL_DIM);
     }
+    gfx_clip_y(0, SCREEN_H);
     gfx_text_mid(SCREEN_W / 2, 226, "HOLD L + R FOR SETTINGS", 1, COL_DIM);
 }
 
@@ -221,25 +243,26 @@ static void draw_settings(const app_view_t *v)
 {
     char buf[40];
     title("SETTINGS");
+    int y0 = SET_Y0 - v->settings_scroll; /* screen y of list row 0 */
+    gfx_clip_y(SET_Y0, LIST_Y1);
 
     /* volume 0 is silent: there is no separate mute */
     bool silent = v->vol == 0;
-    gfx_text(16, 56, "VOLUME", 2, COL_TEXT);
+    gfx_text(16, y0 + ROW_VOL + 14, "VOLUME", 2, COL_TEXT);
     if (silent) {
         snprintf(buf, sizeof(buf), "OFF");
     } else {
         snprintf(buf, sizeof(buf), "%d", v->vol);
     }
-    gfx_text_right(224, 56, buf, 2, silent ? COL_DIM : COL_ACCENT);
-    int kx = SL_X0 + (SL_X1 - SL_X0) * v->vol / 100;
+    gfx_text_right(224, y0 + ROW_VOL + 14, buf, 2, silent ? COL_DIM : COL_ACCENT);
+    int kx = SL_X0 + (SL_X1 - SL_X0) * v->vol / 100, ky = y0 + SL_Y;
     uint16_t sc = silent ? COL_DIM : COL_ACCENT;
-    gfx_rect(SL_X0, SL_Y - 1, SL_X1 - SL_X0, 2, COL_LINE);
-    gfx_rect(SL_X0, SL_Y - 1, kx - SL_X0, 2, sc);
-    gfx_disc(kx, SL_Y, 7, sc);
-    gfx_text(SL_X0, SL_Y + 12, "0 = SILENT", 1, COL_DIM);
-    hline(124);
+    gfx_rect(SL_X0, ky - 1, SL_X1 - SL_X0, 2, COL_LINE);
+    gfx_rect(SL_X0, ky - 1, kx - SL_X0, 2, sc);
+    gfx_disc(kx, ky, 7, sc);
+    gfx_rect(0, y0 + ROW_WIFI - 1, SCREEN_W, 1, COL_LINE);
 
-    gfx_text(16, 140, "WI-FI", 2, COL_TEXT);
+    gfx_text(16, y0 + ROW_WIFI + 19, "WI-FI", 2, COL_TEXT);
     switch (v->wifi) {
     case WIFI_CONNECTED:
         snprintf(buf, sizeof(buf), "CONNECTED %s", v->ip);
@@ -257,11 +280,21 @@ static void draw_settings(const app_view_t *v)
         snprintf(buf, sizeof(buf), "NOT SET UP");
         break;
     }
-    gfx_text(16, 194, buf, 1, v->wifi == WIFI_CONNECTED ? COL_ACCENT : COL_DIM);
-    button(BTN_SETUP, "SET UP", COL_TEXT);
+    gfx_text(16, y0 + ROW_WIFI + 58, buf, 1, v->wifi == WIFI_CONNECTED ? COL_ACCENT : COL_DIM);
+    button(at(BTN_SETUP, SET_Y0, v->settings_scroll), "SET UP", COL_TEXT);
+    gfx_rect(0, y0 + ROW_KEYS - 1, SCREEN_W, 1, COL_LINE);
 
-    snprintf(buf, sizeof(buf), "V %.12s", v->version);
-    gfx_text(16, 226, buf, 1, COL_LINE);
+    gfx_text(16, y0 + ROW_KEYS + 12, "BUTTONS", 2, COL_TEXT);
+    gfx_text(16, y0 + ROW_KEYS + 36, "LEFT: BACK", 1, COL_DIM);
+    gfx_text(16, y0 + ROW_KEYS + 50, "HOLD LEFT + RIGHT: SETTINGS", 1, COL_DIM);
+    gfx_text(16, y0 + ROW_KEYS + 64, "HOLD MIDDLE: POWER OFF", 1, COL_DIM);
+    gfx_rect(0, y0 + ROW_ABOUT - 1, SCREEN_W, 1, COL_LINE);
+
+    gfx_text(16, y0 + ROW_ABOUT + 12, "VERSION", 1, COL_DIM);
+    snprintf(buf, sizeof(buf), "%.32s", v->version);
+    gfx_text(16, y0 + ROW_ABOUT + 26, buf, 1, COL_TEXT);
+
+    gfx_clip_y(0, SCREEN_H);
     gfx_text_right(224, 226, "LEFT = BACK", 1, COL_DIM);
 }
 
@@ -331,6 +364,21 @@ void ui_render(const app_view_t *v)
     display_flush();
 }
 
+bool ui_list_size(screen_t s, int *view_h, int *content_h)
+{
+    if (s == SCR_MENU) {
+        *view_h = LIST_Y1 - MENU_Y0;
+        *content_h = menu_h();
+        return true;
+    }
+    if (s == SCR_SETTINGS) {
+        *view_h = LIST_Y1 - SET_Y0;
+        *content_h = SET_H;
+        return true;
+    }
+    return false;
+}
+
 int ui_slider_value(int x)
 {
     int v = (x - SL_X0) * 100 / (SL_X1 - SL_X0);
@@ -341,8 +389,11 @@ hit_t ui_hit(const app_view_t *v, int x, int y, int *arg)
 {
     switch (v->screen) {
     case SCR_MENU:
-        for (int i = 0; i < GAME_COUNT && i < TILES_MAX; i++) {
-            if (in_rect(tile_rect(i), x, y)) {
+        if (y < MENU_Y0 || y >= LIST_Y1) {
+            return HIT_NONE;
+        }
+        for (int i = 0; i < GAME_COUNT; i++) {
+            if (in_rect(at(tile_rect(i), MENU_Y0, v->menu_scroll), x, y)) {
                 *arg = i;
                 return HIT_TILE;
             }
@@ -368,11 +419,14 @@ hit_t ui_hit(const app_view_t *v, int x, int y, int *arg)
         }
         return HIT_NONE;
     case SCR_SETTINGS:
-        if (in_rect(SLIDER_AREA, x, y)) {
+        if (y < SET_Y0 || y >= LIST_Y1) {
+            return HIT_NONE;
+        }
+        if (in_rect(at(SLIDER_AREA, SET_Y0, v->settings_scroll), x, y)) {
             *arg = ui_slider_value(x);
             return HIT_SLIDER;
         }
-        if (in_rect(BTN_SETUP, x, y)) {
+        if (in_rect(at(BTN_SETUP, SET_Y0, v->settings_scroll), x, y)) {
             return HIT_WIFI_SETUP;
         }
         return HIT_NONE;

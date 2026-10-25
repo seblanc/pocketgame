@@ -14,7 +14,9 @@ void display_flush(void);
 
 /* Frame-buffer drawing. Lines, arcs and discs are anti-aliased; angles are in
  * degrees, 0 = right, 90 = down (screen coordinates). */
-void gfx_clear(uint16_t c);
+void gfx_clear(uint16_t c); /* also resets the clip */
+/* limits all drawing to rows y0..y1-1 (scrolling lists) */
+void gfx_clip_y(int y0, int y1);
 void gfx_rect(int x, int y, int w, int h, uint16_t c);
 void gfx_rrect(int x, int y, int w, int h, int r, uint16_t c); /* 1 px rounded outline */
 void gfx_line(float x0, float y0, float x1, float y1, float width, uint16_t c);

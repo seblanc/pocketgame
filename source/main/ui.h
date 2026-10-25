@@ -8,8 +8,8 @@ typedef enum {
     HIT_NEW_GAME,   /* tap anywhere after a finished game */
     HIT_YES,
     HIT_NO,
-    HIT_SLIDER,     /* arg = volume 0..100 */
-    HIT_WIFI_SETUP,
+    HIT_SLIDER,     /* on the volume bar itself; arg = volume 0..100 */
+    HIT_WIFI_SETUP, /* acts on release, like HIT_TILE */
     HIT_WIFI_DONE,
 } hit_t;
 
@@ -19,3 +19,5 @@ void ui_render(const app_view_t *v);
 hit_t ui_hit(const app_view_t *v, int x, int y, int *arg);
 /* volume for a finger at x on the slider */
 int ui_slider_value(int x);
+/* the scrolling list of screen s (menu, settings): false if it has none */
+bool ui_list_size(screen_t s, int *view_h, int *content_h);

@@ -13,8 +13,12 @@
 #define DAC_MAX 0xBF   /* ES8311 reg 0x32: 0xBF = 0 dB, 0.5 dB steps */
 #define DAC_RANGE 80   /* volume 1..100 spans 40 dB */
 
+#define SOFT_AMPLITUDE 2600
+#define SOFT_TAU_MS 7.0f /* soft notes: 1 ms attack, then this exponential decay */
+
 typedef struct {
     uint16_t hz, ms;
+    bool soft; /* a quiet, decaying "tock" instead of a flat beep */
 } note_t;
 
 static const note_t TUNE_X[] = {{660, 60}, {0, 0}};
@@ -23,7 +27,7 @@ static const note_t TUNE_BAD[] = {{180, 140}, {0, 0}};
 static const note_t TUNE_WIN[] = {{523, 110}, {659, 110}, {784, 110}, {1047, 240}, {0, 0}};
 static const note_t TUNE_DRAW[] = {{440, 160}, {330, 260}, {0, 0}};
 static const note_t TUNE_NEW[] = {{880, 50}, {1175, 70}, {0, 0}};
-static const note_t TUNE_TICK[] = {{1320, 18}, {0, 0}}; /* short: one per scroll step */
+static const note_t TUNE_TICK[] = {{990, 32, true}, {0, 0}}; /* slider and scroll steps */
 static const note_t *const TUNES[] = {TUNE_X, TUNE_O, TUNE_BAD, TUNE_WIN, TUNE_DRAW, TUNE_NEW, TUNE_TICK};
 
 static QueueHandle_t s_q;
@@ -37,17 +41,23 @@ static void play_note(const note_t *n)
     static int16_t buf[256 * 2];
     int total = RATE * n->ms / 1000, done = 0;
     float phase = 0, step = 2 * (float)M_PI * n->hz / RATE;
-    int fade = RATE / 200; /* 5 ms ramps avoid clicks */
+    int fade = n->soft ? RATE / 1000 : RATE / 200; /* ramps avoid clicks */
+    float amp = n->soft ? SOFT_AMPLITUDE : AMPLITUDE;
+    float decay = n->soft ? expf(-1000.0f / (SOFT_TAU_MS * RATE)) : 1.0f, tail = 1;
     while (done < total) {
         int frames = total - done > 256 ? 256 : total - done;
         for (int i = 0; i < frames; i++, done++) {
             float env = 1;
             if (done < fade) {
                 env = (float)done / fade;
-            } else if (total - done < fade) {
-                env = (float)(total - done) / fade;
+            } else {
+                tail *= decay;
+                env = tail;
+                if (total - done < fade) {
+                    env *= (float)(total - done) / fade;
+                }
             }
-            int16_t s = (int16_t)(sinf(phase) * AMPLITUDE * env);
+            int16_t s = (int16_t)(sinf(phase) * amp * env);
             phase += step;
             if (phase > 2 * (float)M_PI) {
                 phase -= 2 * (float)M_PI;

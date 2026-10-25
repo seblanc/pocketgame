@@ -43,6 +43,7 @@
 #include "hal/usb_serial_jtag_ll.h"
 #include "i2cbus.h"
 #include "net.h"
+#include "scroll.h"
 #include "settings.h"
 #include "sound.h"
 #include "touch.h"
@@ -297,7 +298,8 @@ static void app_settings(const char *src)
     sound_play(SND_TICK);
 }
 
-static void app_set_volume(int vol, bool save)
+/* save: store in NVS and report VOL n; tick: play the tick at the new level */
+static void app_set_volume(int vol, bool save, bool tick)
 {
     vol = vol < 0 ? 0 : vol > 100 ? 100 : vol;
     lock();
@@ -307,6 +309,8 @@ static void app_set_volume(int vol, bool save)
     if (save) {
         settings_save_volume(vol);
         out("VOL %d", vol);
+    }
+    if (tick) {
         sound_play(SND_TICK);
     }
     request_redraw();
@@ -493,7 +497,7 @@ static void handle_line(char *line)
         if (end == arg || v < 0 || v > 100) {
             out("ERR vol 0-100");
         } else {
-            app_set_volume((int)v, true);
+            app_set_volume((int)v, true, true);
         }
     } else if (strcmp(line, "wifi") == 0) {
         handle_wifi(arg);
@@ -554,20 +558,23 @@ static void display_task(void *arg)
     }
 }
 
-/* true when the press starts a slider drag; a game tile goes to *tile instead */
-static bool on_press(int x, int y, int *tile)
+/* Runs what a press does at once. Returns the hit for the touch task to finish: the
+ * slider (a drag) and list taps (tiles, SET UP), which act on release unless the finger
+ * scrolled the list. */
+static hit_t on_press(int x, int y, int *arg)
 {
     app_view_t v;
     snapshot(&v);
-    int arg = -1;
-    hit_t h = ui_hit(&v, x, y, &arg);
-    out("TAP x=%d y=%d screen=%s hit=%d arg=%d", x, y, SCREEN_NAMES[v.screen], h, arg);
+    *arg = -1;
+    hit_t h = ui_hit(&v, x, y, arg);
+    out("TAP x=%d y=%d screen=%s hit=%d arg=%d", x, y, SCREEN_NAMES[v.screen], h, *arg);
     switch (h) {
     case HIT_TILE:
-        *tile = arg; /* opens on release, unless the finger moved (a scroll) */
-        break;
+    case HIT_WIFI_SETUP:
+    case HIT_SLIDER:
+        return h;
     case HIT_CELL:
-        app_play(arg, "touch");
+        app_play(*arg, "touch");
         break;
     case HIT_NEW_GAME:
         app_new_game("touch");
@@ -576,66 +583,152 @@ static bool on_press(int x, int y, int *tile)
     case HIT_NO:
         app_confirm(h == HIT_YES);
         break;
-    case HIT_SLIDER:
-        app_set_volume(arg, false);
-        return true;
-    case HIT_WIFI_SETUP:
-        app_wifi_setup();
-        break;
     case HIT_WIFI_DONE:
         app_back("touch");
         break;
     case HIT_NONE:
         break;
     }
-    return false;
+    return HIT_NONE;
 }
 
-/* While the finger is down the UI ticks on every step: each SCROLL_STEP_PX of movement
- * (a scroll step) and each VOL_STEP of the volume slider, not only on release. */
+/* Ticks follow the finger but never closer than TICK_MIN_MS, so a fast drag gives a
+ * steady ~11/s instead of a buzz. The slider ticks only when its value changes; the
+ * home menu list ticks every SCROLL_STEP_PX of finger travel (the Settings list
+ * scrolls silently, so the only sound there is the volume bar's). */
+#define TICK_MIN_MS 90
 #define SCROLL_STEP_PX 12
-#define VOL_STEP 5
+#define TAP_SLOP_PX 8   /* more finger travel than this is a scroll, not a tap */
+#define SLIDER_DEAD_PX 2 /* touch jitter on a resting finger does not move the volume */
+#define TOUCH_MS 20
+
+static uint32_t now_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
+
+static void play_tick(uint32_t *last)
+{
+    uint32_t now = now_ms();
+    if (now - *last >= TICK_MIN_MS) {
+        *last = now;
+        sound_play(SND_TICK);
+    }
+}
+
+static scroller_t s_lists[2]; /* menu, settings: touch task only */
+
+static scroller_t *list_of(screen_t s)
+{
+    return s == SCR_MENU ? &s_lists[0] : s == SCR_SETTINGS ? &s_lists[1] : NULL;
+}
+
+/* hands the list offset to the screens; redraws when it changed */
+static void publish_scroll(screen_t s, const scroller_t *sc)
+{
+    int off = scroll_offset(sc);
+    lock();
+    int *dst = s == SCR_MENU ? &s_v.menu_scroll : &s_v.settings_scroll;
+    bool changed = *dst != off;
+    *dst = off;
+    unlock();
+    if (changed) {
+        request_redraw();
+    }
+}
 
 static void touch_task(void *arg)
 {
-    bool was = false, drag = false, moved = false;
-    int last_vol = -1, tile = -1;
-    int step_x = 0, step_y = 0;
+    bool was = false, slider = false, moved = false;
+    hit_t pending = HIT_NONE; /* list tap waiting for the release */
+    int pending_arg = -1, last_vol = -1, slider_x = 0;
+    int press_x = 0, press_y = 0, tick_y = 0;
+    uint32_t last_tick = 0, last_ms = now_ms();
+    screen_t shown = SCR_OFF;
+    scroller_t *sc = NULL;
     for (;;) {
+        lock();
+        screen_t scr = s_v.screen;
+        unlock();
+        if (scr != shown) {
+            /* a list starts at its top each time its screen opens */
+            shown = scr;
+            sc = list_of(scr);
+            if (sc) {
+                int view_h, content_h;
+                ui_list_size(scr, &view_h, &content_h);
+                scroll_reset(sc, view_h, content_h);
+                publish_scroll(scr, sc);
+            }
+            slider = false;
+            pending = HIT_NONE;
+        }
+
         int x = 0, y = 0;
         bool down = touch_read(&x, &y);
+        uint32_t now = now_ms();
         if (down && !was) {
-            tile = -1;
+            bool gliding = sc && scroll_moving(sc); /* a touch on a moving list only stops it */
             moved = false;
-            step_x = x;
-            step_y = y;
-            drag = on_press(x, y, &tile);
-            last_vol = drag ? ui_slider_value(x) : -1;
-        } else if (down && drag) {
-            int v = ui_slider_value(x);
-            if (v != last_vol) {
-                bool step = v / VOL_STEP != last_vol / VOL_STEP || v == 0 || v == 100;
-                last_vol = v;
-                app_set_volume(v, false);
-                if (step) {
-                    sound_play(SND_TICK);
+            press_x = x;
+            press_y = tick_y = y;
+            hit_t h = on_press(x, y, &pending_arg);
+            slider = h == HIT_SLIDER;
+            pending = (h == HIT_TILE || h == HIT_WIFI_SETUP) && !gliding ? h : HIT_NONE;
+            if (slider) {
+                slider_x = x;
+                lock();
+                int vol = s_v.vol;
+                unlock();
+                if (pending_arg != vol) {
+                    app_set_volume(pending_arg, false, false);
+                    play_tick(&last_tick);
+                }
+                last_vol = pending_arg;
+            } else if (sc) {
+                scroll_press(sc, y, now);
+            }
+        } else if (down && slider) {
+            if (abs(x - slider_x) >= SLIDER_DEAD_PX) {
+                slider_x = x;
+                int v = ui_slider_value(x);
+                if (v != last_vol) {
+                    last_vol = v;
+                    app_set_volume(v, false, false);
+                    play_tick(&last_tick);
                 }
             }
-        } else if (down) {
-            if (abs(x - step_x) >= SCROLL_STEP_PX || abs(y - step_y) >= SCROLL_STEP_PX) {
-                step_x = x;
-                step_y = y;
+        } else if (down && sc) {
+            if (abs(x - press_x) > TAP_SLOP_PX || abs(y - press_y) > TAP_SLOP_PX) {
                 moved = true;
-                sound_play(SND_TICK);
             }
-        } else if (was && drag) {
-            drag = false;
-            app_set_volume(last_vol, true); /* save once, on release */
-        } else if (was && tile >= 0 && !moved) {
-            app_open_game(tile, "touch");
+            scroll_drag(sc, y, now);
+            publish_scroll(scr, sc);
+            if (scr == SCR_MENU && abs(y - tick_y) >= SCROLL_STEP_PX) {
+                tick_y = y;
+                play_tick(&last_tick);
+            }
+        } else if (!down && was) {
+            if (slider) {
+                slider = false;
+                app_set_volume(last_vol, true, false); /* save once, on release */
+            } else {
+                if (sc) {
+                    scroll_release(sc, now);
+                }
+                if (pending == HIT_TILE && !moved) {
+                    app_open_game(pending_arg, "touch");
+                } else if (pending == HIT_WIFI_SETUP && !moved) {
+                    app_wifi_setup();
+                }
+            }
+            pending = HIT_NONE;
         }
+        if (!down && sc) {
+            float dt = (now - last_ms) / 1000.0f;
+            scroll_step(sc, dt > 0.1f ? 0.1f : dt);
+            publish_scroll(scr, sc);
+        }
+        last_ms = now;
         was = down;
-        vTaskDelay(pdMS_TO_TICKS(20));
+        vTaskDelay(pdMS_TO_TICKS(TOUCH_MS));
     }
 }
 

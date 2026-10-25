@@ -25,6 +25,8 @@ typedef struct {
     int wins_x, wins_o;
     uint8_t next_starter; /* who starts the next round: alternates after each finished one */
     int vol;              /* 0..100, 0 = silent */
+    int menu_scroll;      /* list offsets in px (negative or past the end while stretched) */
+    int settings_scroll;
     int bat_mv, bat_pct;
     wifi_state_t wifi;
     char ip[16];

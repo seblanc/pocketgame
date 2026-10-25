@@ -8,18 +8,23 @@ Minimal UI: dark background, thin lines, one accent colour.
 - **Tic-tac-toe:** tap a cell to place X or O; after a win or a draw, tap anywhere for a new game.
   X is blue, O is red: a banner in the player's colour shows who starts ("X STARTS") and whose turn it
   is. The starting player alternates after every finished round (an abandoned round keeps its starter).
-- **Touch sound:** a short tick plays on every scroll step while the finger moves (every 12 px) and every
-  5 volume steps while dragging the slider, not only on release. Menu tiles open on a tap (release
-  without moving).
+- **Scrolling lists:** the home menu game list and the Settings rows scroll by finger drag, keep gliding
+  after a flick and slow down, and stretch with resistance past the top or bottom, springing back on
+  release (iOS-style). Menu tiles and the Wi-Fi SET UP button act on a tap (release without scrolling);
+  touching a gliding list only stops it.
+- **Touch sound:** a soft, decaying tick. The volume slider ticks only while the finger is on the volume
+  bar and the value changes; the menu list ticks every 12 px of drag. Ticks are at least 90 ms apart, and
+  the Settings list scrolls silently.
 - **Buttons:** a short press on LEFT goes back (asks to confirm while a game is in progress);
   holding LEFT + RIGHT for 3 s opens Settings. The middle button is only the power key:
   holding it 3 s shows "Powering off" and releases the battery latch (on USB power the board sleeps
   instead, and the next press wakes it).
-- **Settings:** volume slider (saved in NVS; 0 = silent, there is no separate mute) and Wi-Fi setup:
+- **Settings:** a scrolling list of rows: volume slider (saved in NVS; 0 shows OFF and is silent, there
+  is no separate mute), Wi-Fi, a button reference and the firmware version. Wi-Fi setup:
   the board scans for networks, opens the hotspot `PocketGame-XXXX`; join it from a phone, the setup page
   opens (or visit `192.168.4.1`) and lists nearby networks (signal bars, dBm, lock for secured ones).
-  Tap one to fill in its name, or type a name by hand; "Scan again" rescans. Enter the password and the
-  board joins the network.
+  Tap one to fill in its name, or type a name by hand; "Scan again" rescans. Enter the password and tap
+  the filled, rounded CONNECT button; the board joins the network.
 - **HTTP (port 80, on the joined network):** `GET /status` returns JSON (`{"app":"pocketgame",...}`).
 - The partition table has two OTA app slots and rollback is enabled, ready for over-the-air updates
   (for example from GitHub releases).
@@ -40,3 +45,5 @@ Serial commands (USB-C console, 115200):
 | `wifi`, `wifi setup`, `wifi stop`, `wifi forget` | Wi-Fi state, setup hotspot on/off, forget the network |
 
 Host test of the rules: `gcc -I source/main tests/test_game.c source/main/game.c -o test_game && ./test_game`
+
+Host test of the list scrolling: `gcc -I source/main tests/test_scroll.c source/main/scroll.c -lm -o test_scroll && ./test_scroll`

@@ -19,6 +19,7 @@
 static esp_lcd_panel_handle_t s_panel;
 static SemaphoreHandle_t s_done;
 static uint16_t *s_fb; /* SCREEN_W x SCREEN_H, byte-swapped RGB565 for the SPI bus */
+static int s_clip_y0 = 0, s_clip_y1 = SCREEN_H; /* drawing only lands on rows y0..y1-1 */
 
 static bool on_trans_done(esp_lcd_panel_io_handle_t io, esp_lcd_panel_io_event_data_t *e, void *ctx)
 {
@@ -48,7 +49,7 @@ static inline uint16_t swap16(uint16_t c) { return (uint16_t)((c >> 8) | (c << 8
 /* mixes colour c over the pixel with coverage a (0..1) */
 static void blend(int x, int y, uint16_t c, float a)
 {
-    if (x < 0 || y < 0 || x >= SCREEN_W || y >= SCREEN_H || a <= 0) {
+    if (x < 0 || y < s_clip_y0 || x >= SCREEN_W || y >= s_clip_y1 || a <= 0) {
         return;
     }
     uint16_t *p = &s_fb[y * SCREEN_W + x];
@@ -66,7 +67,17 @@ static void blend(int x, int y, uint16_t c, float a)
 
 static inline float clamp01(float v) { return v < 0 ? 0 : v > 1 ? 1 : v; }
 
-void gfx_clear(uint16_t c) { gfx_rect(0, 0, SCREEN_W, SCREEN_H, c); }
+void gfx_clip_y(int y0, int y1)
+{
+    s_clip_y0 = y0 < 0 ? 0 : y0;
+    s_clip_y1 = y1 > SCREEN_H ? SCREEN_H : y1;
+}
+
+void gfx_clear(uint16_t c)
+{
+    gfx_clip_y(0, SCREEN_H);
+    gfx_rect(0, 0, SCREEN_W, SCREEN_H, c);
+}
 
 void gfx_rect(int x, int y, int w, int h, uint16_t c)
 {
@@ -74,7 +85,7 @@ void gfx_rect(int x, int y, int w, int h, uint16_t c)
         return;
     }
     uint16_t v = swap16(c);
-    for (int j = y < 0 ? 0 : y; j < y + h && j < SCREEN_H; j++) {
+    for (int j = y < s_clip_y0 ? s_clip_y0 : y; j < y + h && j < s_clip_y1; j++) {
         for (int i = x < 0 ? 0 : x; i < x + w && i < SCREEN_W; i++) {
             s_fb[j * SCREEN_W + i] = v;
         }
