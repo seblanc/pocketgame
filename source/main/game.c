@@ -7,12 +7,16 @@ static const uint8_t LINES[8][3] = {
     {0, 4, 8}, {2, 4, 6},
 };
 
-void game_new(game_t *g)
+void game_start(game_t *g, uint8_t first)
 {
     memset(g, 0, sizeof(*g));
-    g->turn = CELL_X;
+    g->turn = g->starter = first == CELL_O ? CELL_O : CELL_X;
     g->status = GAME_PLAYING;
 }
+
+void game_new(game_t *g) { game_start(g, CELL_X); }
+
+uint8_t game_other(uint8_t mark) { return mark == CELL_X ? CELL_O : CELL_X; }
 
 move_result_t game_play(game_t *g, int cell)
 {
@@ -42,7 +46,7 @@ move_result_t game_play(game_t *g, int cell)
         g->status = GAME_DRAW;
         return MOVE_OK;
     }
-    g->turn = (mark == CELL_X) ? CELL_O : CELL_X;
+    g->turn = game_other(mark);
     return MOVE_OK;
 }
 

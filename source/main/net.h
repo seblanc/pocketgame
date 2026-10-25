@@ -4,7 +4,7 @@
 
 /* Wi-Fi station with credentials kept in NVS, the phone setup hotspot
  * (PocketGame-XXXX, captive page at 192.168.4.1) and the HTTP server on port 80
- * (GET /status, GET / and, during setup, POST /save). */
+ * (GET /status, GET / and, during setup, POST /save and GET /scan). */
 
 typedef enum { WIFI_OFF, WIFI_CONNECTING, WIFI_CONNECTED, WIFI_FAILED, WIFI_SETUP } wifi_state_t;
 
@@ -14,6 +14,9 @@ bool net_init(void);
 void net_connect(void);
 void net_setup_start(void);
 void net_setup_stop(void);
+/* Scans for access points in the background (also done when setup starts); logs
+ * "WIFI scan n=<count>" and one line per network. The setup page lists the result. */
+void net_scan(void);
 wifi_state_t net_state(void);
 const char *net_state_name(wifi_state_t s);
 /* station IP, "" when not connected */

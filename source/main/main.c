@@ -1,8 +1,8 @@
 /* PocketGame: a small multi-game handheld on the ESP32-S3-LCD-1.54 touch board.
  *
  * Screens: home menu (one tile per game, top bar with battery % and Wi-Fi), the
- * games (tic-tac-toe for now), a leave-game confirmation, Settings (volume, mute,
- * Wi-Fi) and the Wi-Fi setup hotspot screen.
+ * games (tic-tac-toe for now), a leave-game confirmation, Settings (volume, where 0
+ * is silent, and Wi-Fi) and the Wi-Fi setup hotspot screen.
  *
  * Buttons: a short press on LEFT goes back (asking first while a game is running);
  * holding LEFT + RIGHT for 3 s opens Settings. The middle button is only the power
@@ -10,13 +10,15 @@
  *
  * Serial protocol (USB Serial/JTAG console, one command per line):
  *   new | play <0-8> | board   tic-tac-toe, as before (switches to the game screen):
- *                              BOARD ........., TURN O | WIN X line=a,b,c | DRAW,
+ *                              READY turn=X (who starts: alternates after each finished
+ *                              round), BOARD ........., TURN O | WIN X line=a,b,c | DRAW,
  *                              ERR occupied | ERR game over | ERR bad cell
- *   status                     STATUS screen=menu bat=.. mv=.. wifi=.. ip=.. vol=.. mute=..
+ *   status                     STATUS screen=menu bat=.. mv=.. wifi=.. ip=.. starter=X vol=..
  *   open <id> | back | yes | no | settings      navigation, replies SCREEN ...
- *   vol <0-100> | mute <0|1>                    VOL n, MUTE n (saved in NVS)
- *   wifi [ssid | pass | setup | stop | forget]  ssid/pass ask SSID? / PASS? and read
- *                                               the next line as the value
+ *   vol <0-100>                                 VOL n (saved in NVS, 0 = silent)
+ *   wifi [ssid | pass | scan | setup | stop | forget]  ssid/pass ask SSID? / PASS? and
+ *                                               read the next line as the value; scan
+ *                                               replies WIFI scan n=<count>, one line per AP
  */
 #include <ctype.h>
 #include <stdarg.h>
@@ -141,6 +143,15 @@ static void print_state_locked(void)
     }
 }
 
+/* a fresh board; the starter alternates after every finished round (an abandoned
+ * round is replayed by the same starter) */
+static void new_round_locked(void)
+{
+    game_start(&s_v.game, s_v.next_starter);
+}
+
+static void print_ready_locked(void) { out("READY turn=%c", game_mark_char(s_v.game.starter)); }
+
 static void app_open_game(int idx, const char *src)
 {
     lock();
@@ -150,10 +161,14 @@ static void app_open_game(int idx, const char *src)
         return;
     }
     s_v.game_idx = idx;
-    if (s_v.game.status != GAME_PLAYING) {
-        game_new(&s_v.game);
+    bool fresh = s_v.game.status != GAME_PLAYING;
+    if (fresh) {
+        new_round_locked();
     }
     show_locked(SCR_GAME);
+    if (fresh) {
+        print_ready_locked();
+    }
     print_board_locked();
     print_state_locked();
     unlock();
@@ -164,8 +179,9 @@ static void app_new_game(const char *src)
 {
     lock();
     ensure_game_locked();
-    game_new(&s_v.game);
+    new_round_locked();
     out("NEW src=%s", src);
+    print_ready_locked();
     print_board_locked();
     print_state_locked();
     unlock();
@@ -195,6 +211,9 @@ static void app_play(int cell, const char *src)
         out("MOVE %c %d src=%s", game_mark_char(mover), cell, src);
         print_board_locked();
         print_state_locked();
+        if (g->status != GAME_PLAYING) {
+            s_v.next_starter = game_other(g->starter);
+        }
         if (g->status == GAME_WIN) {
             if (g->winner == CELL_X) {
                 s_v.wins_x++;
@@ -226,7 +245,7 @@ static void app_back(const char *src)
         if (game_running_locked()) {
             show_locked(SCR_CONFIRM);
         } else {
-            game_new(&s_v.game);
+            new_round_locked();
             show_locked(SCR_MENU);
         }
         break;
@@ -258,7 +277,7 @@ static void app_confirm(bool yes)
     if (s_v.screen != SCR_CONFIRM) {
         out("ERR nothing to confirm");
     } else if (yes) {
-        game_new(&s_v.game);
+        new_round_locked();
         show_locked(SCR_MENU);
     } else {
         show_locked(SCR_GAME);
@@ -283,27 +302,13 @@ static void app_set_volume(int vol, bool save)
     vol = vol < 0 ? 0 : vol > 100 ? 100 : vol;
     lock();
     s_v.vol = vol;
-    bool mute = s_v.mute;
     unlock();
-    sound_set_level(vol, mute);
+    sound_set_level(vol); /* 0 = silent: there is no separate mute */
     if (save) {
-        settings_save_audio(vol, mute);
+        settings_save_volume(vol);
         out("VOL %d", vol);
         sound_play(SND_TICK);
     }
-    request_redraw();
-}
-
-static void app_set_mute(bool mute)
-{
-    lock();
-    s_v.mute = mute;
-    int vol = s_v.vol;
-    unlock();
-    sound_set_level(vol, mute);
-    settings_save_audio(vol, mute);
-    out("MUTE %d", mute ? 1 : 0);
-    sound_play(SND_TICK);
     request_redraw();
 }
 
@@ -333,9 +338,9 @@ static void print_status(void)
 {
     app_view_t v;
     snapshot(&v);
-    out("STATUS screen=%s game=%s bat=%d mv=%d wifi=%s ip=%s vol=%d mute=%d", SCREEN_NAMES[v.screen],
-        GAMES[v.game_idx].id, v.bat_pct, v.bat_mv, net_state_name(v.wifi), v.ip[0] ? v.ip : "-", v.vol,
-        v.mute ? 1 : 0);
+    out("STATUS screen=%s game=%s bat=%d mv=%d wifi=%s ip=%s starter=%c vol=%d", SCREEN_NAMES[v.screen],
+        GAMES[v.game_idx].id, v.bat_pct, v.bat_mv, net_state_name(v.wifi), v.ip[0] ? v.ip : "-",
+        game_mark_char(v.game.starter), v.vol);
 }
 
 void app_status_json(char *buf, size_t n)
@@ -344,9 +349,9 @@ void app_status_json(char *buf, size_t n)
     snapshot(&v);
     snprintf(buf, n,
              "{\"app\":\"pocketgame\",\"version\":\"%s\",\"screen\":\"%s\",\"games\":%d,"
-             "\"battery\":{\"mv\":%d,\"pct\":%d},\"wifi\":\"%s\",\"ip\":\"%s\",\"vol\":%d,\"mute\":%s}",
+             "\"battery\":{\"mv\":%d,\"pct\":%d},\"wifi\":\"%s\",\"ip\":\"%s\",\"vol\":%d}",
              v.version, SCREEN_NAMES[v.screen], GAME_COUNT, v.bat_mv, v.bat_pct, net_state_name(v.wifi), v.ip,
-             v.vol, v.mute ? "true" : "false");
+             v.vol);
 }
 
 static void read_battery(void)
@@ -409,6 +414,8 @@ static void handle_wifi(const char *arg)
     } else if (strcmp(arg, "pass") == 0) {
         s_expect = EXPECT_PASS;
         out("PASS?");
+    } else if (strcmp(arg, "scan") == 0) {
+        net_scan();
     } else if (strcmp(arg, "setup") == 0) {
         app_wifi_setup();
     } else if (strcmp(arg, "stop") == 0) {
@@ -422,7 +429,7 @@ static void handle_wifi(const char *arg)
         net_ip(ip, sizeof(ip));
         out("WIFI state=%s ip=%s ap=%s", net_state_name(net_state()), ip[0] ? ip : "-", net_ap_name());
     } else {
-        out("ERR wifi (ssid | pass | setup | stop | forget)");
+        out("ERR wifi (ssid | pass | scan | setup | stop | forget)");
     }
 }
 
@@ -488,17 +495,11 @@ static void handle_line(char *line)
         } else {
             app_set_volume((int)v, true);
         }
-    } else if (strcmp(line, "mute") == 0) {
-        if (strcmp(arg, "0") != 0 && strcmp(arg, "1") != 0) {
-            out("ERR mute 0|1");
-        } else {
-            app_set_mute(arg[0] == '1');
-        }
     } else if (strcmp(line, "wifi") == 0) {
         handle_wifi(arg);
     } else {
         out("ERR unknown command (new | play <0-8> | board | status | open ttt | back | yes | no | settings | "
-            "vol <0-100> | mute <0|1> | wifi ...)");
+            "vol <0-100> | wifi ...)");
     }
 }
 
@@ -553,8 +554,8 @@ static void display_task(void *arg)
     }
 }
 
-/* true when the press starts a slider drag */
-static bool on_press(int x, int y)
+/* true when the press starts a slider drag; a game tile goes to *tile instead */
+static bool on_press(int x, int y, int *tile)
 {
     app_view_t v;
     snapshot(&v);
@@ -563,7 +564,7 @@ static bool on_press(int x, int y)
     out("TAP x=%d y=%d screen=%s hit=%d arg=%d", x, y, SCREEN_NAMES[v.screen], h, arg);
     switch (h) {
     case HIT_TILE:
-        app_open_game(arg, "touch");
+        *tile = arg; /* opens on release, unless the finger moved (a scroll) */
         break;
     case HIT_CELL:
         app_play(arg, "touch");
@@ -578,9 +579,6 @@ static bool on_press(int x, int y)
     case HIT_SLIDER:
         app_set_volume(arg, false);
         return true;
-    case HIT_MUTE:
-        app_set_mute(!v.mute);
-        break;
     case HIT_WIFI_SETUP:
         app_wifi_setup();
         break;
@@ -593,25 +591,48 @@ static bool on_press(int x, int y)
     return false;
 }
 
+/* While the finger is down the UI ticks on every step: each SCROLL_STEP_PX of movement
+ * (a scroll step) and each VOL_STEP of the volume slider, not only on release. */
+#define SCROLL_STEP_PX 12
+#define VOL_STEP 5
+
 static void touch_task(void *arg)
 {
-    bool was = false, drag = false;
-    int last_vol = -1;
+    bool was = false, drag = false, moved = false;
+    int last_vol = -1, tile = -1;
+    int step_x = 0, step_y = 0;
     for (;;) {
         int x = 0, y = 0;
         bool down = touch_read(&x, &y);
         if (down && !was) {
-            drag = on_press(x, y);
+            tile = -1;
+            moved = false;
+            step_x = x;
+            step_y = y;
+            drag = on_press(x, y, &tile);
             last_vol = drag ? ui_slider_value(x) : -1;
         } else if (down && drag) {
             int v = ui_slider_value(x);
             if (v != last_vol) {
+                bool step = v / VOL_STEP != last_vol / VOL_STEP || v == 0 || v == 100;
                 last_vol = v;
                 app_set_volume(v, false);
+                if (step) {
+                    sound_play(SND_TICK);
+                }
             }
-        } else if (!down && was && drag) {
+        } else if (down) {
+            if (abs(x - step_x) >= SCROLL_STEP_PX || abs(y - step_y) >= SCROLL_STEP_PX) {
+                step_x = x;
+                step_y = y;
+                moved = true;
+                sound_play(SND_TICK);
+            }
+        } else if (was && drag) {
             drag = false;
             app_set_volume(last_vol, true); /* save once, on release */
+        } else if (was && tile >= 0 && !moved) {
+            app_open_game(tile, "touch");
         }
         was = down;
         vTaskDelay(pdMS_TO_TICKS(20));
@@ -745,7 +766,8 @@ void app_main(void)
     rtc_gpio_deinit(KEY_PWR);
 
     s_lock = xSemaphoreCreateMutex();
-    game_new(&s_v.game);
+    s_v.next_starter = CELL_X;
+    new_round_locked(); /* no other task runs yet */
     s_v.screen = SCR_MENU;
     strlcpy(s_v.version, esp_app_get_description()->version, sizeof(s_v.version));
     /* keep the console for the protocol (and Wi-Fi logs would print the network name) */
@@ -779,9 +801,9 @@ void app_main(void)
     out("KEYS left=%d right=%d pwr=%d (pwr: hold 3 s to power off)", KEY_LEFT, KEY_RIGHT, KEY_PWR);
 
     settings_init();
-    settings_load_audio(&s_v.vol, &s_v.mute);
-    sound_set_level(s_v.vol, s_v.mute);
-    out("AUDIO %s vol=%d mute=%d", err == ESP_OK ? sound_init() : "none (no i2c)", s_v.vol, s_v.mute ? 1 : 0);
+    s_v.vol = settings_load_volume();
+    sound_set_level(s_v.vol);
+    out("AUDIO %s vol=%d", err == ESP_OK ? sound_init() : "none (no i2c)", s_v.vol);
 
     if (!battery_init()) {
         out("BAT adc unavailable");
@@ -805,7 +827,9 @@ void app_main(void)
     show_locked(SCR_MENU);
     unlock();
 
-    out("READY turn=X");
+    lock();
+    print_ready_locked();
+    unlock();
     xTaskCreate(console_task, "console", 4096, NULL, 6, NULL);
     /* this build booted: keep it (matters once it arrives over the air) */
     esp_ota_mark_app_valid_cancel_rollback();

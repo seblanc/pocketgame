@@ -14,32 +14,29 @@ void settings_init(void)
     }
 }
 
-void settings_load_audio(int *vol, bool *mute)
+int settings_load_volume(void)
 {
-    *vol = 70;
-    *mute = false;
+    int vol = 70;
     nvs_handle_t h;
     if (nvs_open(NS, NVS_READONLY, &h) != ESP_OK) {
-        return;
+        return vol;
     }
     uint8_t v;
     if (nvs_get_u8(h, "vol", &v) == ESP_OK && v <= 100) {
-        *vol = v;
-    }
-    if (nvs_get_u8(h, "mute", &v) == ESP_OK) {
-        *mute = v != 0;
+        vol = v;
     }
     nvs_close(h);
+    return vol;
 }
 
-void settings_save_audio(int vol, bool mute)
+void settings_save_volume(int vol)
 {
     nvs_handle_t h;
     if (nvs_open(NS, NVS_READWRITE, &h) != ESP_OK) {
         return;
     }
     nvs_set_u8(h, "vol", (uint8_t)vol);
-    nvs_set_u8(h, "mute", mute ? 1 : 0);
+    nvs_erase_key(h, "mute"); /* left over from builds that had a mute switch */
     nvs_commit(h);
     nvs_close(h);
 }

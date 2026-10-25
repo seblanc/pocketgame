@@ -10,6 +10,7 @@
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "lwip/sockets.h"
 #include "settings.h"
@@ -19,9 +20,24 @@
 #define ATTEMPT_TIMEOUT_MS 20000
 #define FAILS_BEFORE_FAILED 5
 
-typedef enum { CMD_CONNECT, CMD_SETUP_START, CMD_SETUP_STOP, CMD_SETUP_SAVED } net_cmd_t;
+#define SCAN_MAX 16     /* networks kept for the setup page */
+#define SCAN_RECORDS 32 /* raw records read from the driver */
+
+typedef enum { CMD_CONNECT, CMD_SETUP_START, CMD_SETUP_STOP, CMD_SETUP_SAVED, CMD_SCAN } net_cmd_t;
+
+/* one network found by the last scan */
+typedef struct {
+    char ssid[SSID_MAX + 1];
+    int8_t rssi;
+    uint8_t channel;
+    bool secure;
+} ap_entry_t;
 
 static QueueHandle_t s_q;
+static SemaphoreHandle_t s_scan_lock;
+static ap_entry_t s_aps[SCAN_MAX]; /* strongest first, under s_scan_lock */
+static int s_ap_count;
+static volatile bool s_scanning;
 static portMUX_TYPE s_mux = portMUX_INITIALIZER_UNLOCKED;
 static volatile wifi_state_t s_state = WIFI_OFF;
 static volatile bool s_attempting;
@@ -70,6 +86,7 @@ static void send_cmd(net_cmd_t c)
 void net_connect(void) { send_cmd(CMD_CONNECT); }
 void net_setup_start(void) { send_cmd(CMD_SETUP_START); }
 void net_setup_stop(void) { send_cmd(CMD_SETUP_STOP); }
+void net_scan(void) { send_cmd(CMD_SCAN); }
 
 static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
@@ -136,6 +153,105 @@ static void sta_connect_saved(void)
     attempt();
 }
 
+/* Runs on the net task: one blocking scan (about 2 s), deduplicated by name and
+ * sorted strongest first. Only the count, signal and channel go to the console:
+ * network names stay off it (one of them may be a test secret). */
+static void do_scan(void)
+{
+    if (s_state == WIFI_CONNECTING || s_state == WIFI_FAILED) {
+        /* a scan cannot run while the station is joining; the retry loop resumes after */
+        esp_wifi_disconnect();
+        s_attempting = false;
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+    s_scanning = true;
+    wifi_scan_config_t sc = {
+        .show_hidden = false,
+        .scan_type = WIFI_SCAN_TYPE_ACTIVE,
+        .scan_time.active = {.min = 60, .max = 120},
+    };
+    esp_err_t err = esp_wifi_scan_start(&sc, true);
+    for (int retry = 0; err != ESP_OK && retry < 3; retry++) {
+        /* the driver may still be busy with the join we just cancelled */
+        vTaskDelay(pdMS_TO_TICKS(500));
+        if (s_state != WIFI_CONNECTED) {
+            esp_wifi_disconnect();
+        }
+        err = esp_wifi_scan_start(&sc, true);
+    }
+    if (err != ESP_OK) {
+        s_scanning = false;
+        app_out("WIFI scan failed err=%s", esp_err_to_name(err));
+        return;
+    }
+    uint16_t n = SCAN_RECORDS;
+    wifi_ap_record_t *rec = calloc(SCAN_RECORDS, sizeof(*rec));
+    if (!rec || esp_wifi_scan_get_ap_records(&n, rec) != ESP_OK) {
+        n = 0;
+    }
+    esp_wifi_clear_ap_list(); /* frees what was not read */
+
+    static ap_entry_t found[SCAN_MAX]; /* net task only */
+    int count = 0;
+    for (int i = 0; i < n; i++) {
+        const char *ssid = (const char *)rec[i].ssid;
+        if (!ssid[0]) {
+            continue;
+        }
+        int j = 0;
+        while (j < count && strcmp(found[j].ssid, ssid) != 0) {
+            j++;
+        }
+        if (j < count) {
+            if (rec[i].rssi > found[j].rssi) {
+                found[j].rssi = rec[i].rssi;
+                found[j].channel = rec[i].primary;
+            }
+            continue;
+        }
+        if (count == SCAN_MAX) {
+            /* full: replace the weakest if this one is stronger */
+            int w = 0;
+            for (int k = 1; k < count; k++) {
+                if (found[k].rssi < found[w].rssi) {
+                    w = k;
+                }
+            }
+            if (rec[i].rssi <= found[w].rssi) {
+                continue;
+            }
+            j = w;
+        } else {
+            j = count++;
+        }
+        strlcpy(found[j].ssid, ssid, sizeof(found[j].ssid));
+        found[j].rssi = rec[i].rssi;
+        found[j].channel = rec[i].primary;
+        found[j].secure = rec[i].authmode != WIFI_AUTH_OPEN;
+    }
+    free(rec);
+    for (int i = 1; i < count; i++) { /* strongest first */
+        ap_entry_t e = found[i];
+        int j = i;
+        for (; j > 0 && found[j - 1].rssi < e.rssi; j--) {
+            found[j] = found[j - 1];
+        }
+        found[j] = e;
+    }
+
+    xSemaphoreTake(s_scan_lock, portMAX_DELAY);
+    memcpy(s_aps, found, sizeof(found));
+    s_ap_count = count;
+    xSemaphoreGive(s_scan_lock);
+    s_scanning = false;
+
+    app_out("WIFI scan n=%d", count);
+    for (int i = 0; i < count; i++) {
+        app_out("WIFI ap %d rssi=%d ch=%d secure=%d", i + 1, found[i].rssi, found[i].channel,
+                found[i].secure ? 1 : 0);
+    }
+}
+
 static void setup_start(void)
 {
     if (s_state == WIFI_SETUP) {
@@ -145,7 +261,9 @@ static void setup_start(void)
     s_attempting = false;
     set_ip("");
     esp_wifi_disconnect();
-    esp_wifi_set_mode(WIFI_MODE_AP);
+    do_scan(); /* before the hotspot is up, so no phone is disturbed by it */
+    /* AP + idle station: the station interface lets the page rescan */
+    esp_wifi_set_mode(WIFI_MODE_APSTA);
     wifi_config_t ap = {0};
     strlcpy((char *)ap.ap.ssid, s_ap_name, sizeof(ap.ap.ssid));
     ap.ap.ssid_len = strlen(s_ap_name);
@@ -189,6 +307,9 @@ static void net_task(void *arg)
                 /* fall through */
             case CMD_SETUP_STOP:
                 setup_stop();
+                break;
+            case CMD_SCAN:
+                do_scan();
                 break;
             }
             continue;
@@ -254,14 +375,30 @@ static const char PAGE_HEAD[] =
     "input{width:100%;box-sizing:border-box;background:none;border:1px solid #303642;border-radius:8px;"
     "color:#e2e6ec;padding:12px;font-size:16px}input:focus{outline:none;border-color:#00d6aa}"
     "button{margin-top:24px;width:100%;padding:12px;background:none;border:1px solid #00d6aa;"
-    "border-radius:8px;color:#00d6aa;font-size:16px;letter-spacing:1px}p{color:#6e7684}</style></head><body>";
+    "border-radius:8px;color:#00d6aa;font-size:16px;letter-spacing:1px}p{color:#6e7684}"
+    ".ap{display:flex;align-items:center;gap:10px;padding:12px;border:1px solid #303642;border-radius:8px;"
+    "margin:6px 0;cursor:pointer}.ap:active,.ap.on{border-color:#00d6aa}.n{flex:1;overflow:hidden;"
+    "text-overflow:ellipsis;white-space:nowrap}.s{color:#6e7684;font-size:13px;white-space:nowrap}"
+    ".b{letter-spacing:1px;color:#00d6aa}.b i{color:#303642;font-style:normal}a{color:#00d6aa}</style>"
+    "<script>function p(e){document.querySelectorAll('.ap').forEach(function(a){a.classList.remove('on')});"
+    "e.classList.add('on');document.getElementsByName('ssid')[0].value=e.dataset.s;"
+    "document.getElementsByName('pass')[0].focus()}</script></head><body>";
 
-static const char PAGE_SETUP[] =
-    "<h1>POCKETGAME WI-FI</h1><form method=post action=/save>"
-    "<label>NETWORK NAME</label><input name=ssid maxlength=32 required autocapitalize=none>"
+static const char PAGE_SETUP_TOP[] = "<h1>POCKETGAME WI-FI</h1><label>NEARBY NETWORKS</label>";
+
+static const char PAGE_SETUP_FORM[] =
+    "<p><a href=/scan>Scan again</a></p><form method=post action=/save>"
+    "<label>NETWORK NAME (TAP ONE ABOVE OR TYPE IT)</label>"
+    "<input name=ssid maxlength=32 required autocapitalize=none autocorrect=off>"
     "<label>PASSWORD</label><input name=pass type=password maxlength=64>"
     "<button>CONNECT</button></form><p>The board leaves this hotspot and joins your network.</p>"
     "</body></html>";
+
+static const char PAGE_SCANNING[] =
+    "<meta http-equiv=refresh content='4;url=/'><script>setTimeout(function(){location='/'},4500)</script>"
+    "<h1>SCANNING</h1>"
+    "<p>Looking for networks. Your phone may drop off the hotspot for a moment; this page "
+    "comes back by itself.</p></body></html>";
 
 static const char PAGE_SAVED[] =
     "<h1>SAVED</h1><p>PocketGame is joining your network now. You can close this page and "
@@ -288,7 +425,82 @@ static esp_err_t send_page(httpd_req_t *r, const char *body)
     return httpd_resp_sendstr_chunk(r, NULL);
 }
 
-static esp_err_t h_root(httpd_req_t *r) { return send_page(r, s_state == WIFI_SETUP ? PAGE_SETUP : PAGE_HOME); }
+/* HTML-escapes s (also safe inside a quoted attribute) */
+static void html_escape(const char *s, char *out, size_t n)
+{
+    size_t o = 0;
+    for (; *s; s++) {
+        const char *rep = NULL;
+        switch (*s) {
+        case '&': rep = "&amp;"; break;
+        case '<': rep = "&lt;"; break;
+        case '>': rep = "&gt;"; break;
+        case '"': rep = "&quot;"; break;
+        case '\'': rep = "&#39;"; break;
+        }
+        size_t len = rep ? strlen(rep) : 1;
+        if (o + len >= n) {
+            break;
+        }
+        if (rep) {
+            memcpy(out + o, rep, len);
+        } else {
+            out[o] = *s;
+        }
+        o += len;
+    }
+    out[o] = '\0';
+}
+
+/* 1..4 bars from the signal level */
+static int signal_bars(int rssi) { return rssi >= -55 ? 4 : rssi >= -67 ? 3 : rssi >= -78 ? 2 : 1; }
+
+/* the setup page: the networks of the last scan (tap one to fill in its name), then
+ * the form, where a name can also be typed by hand */
+static esp_err_t send_setup_page(httpd_req_t *r)
+{
+    static ap_entry_t aps[SCAN_MAX]; /* the HTTP server runs one handler at a time */
+    xSemaphoreTake(s_scan_lock, portMAX_DELAY);
+    int count = s_ap_count;
+    memcpy(aps, s_aps, sizeof(aps));
+    xSemaphoreGive(s_scan_lock);
+
+    httpd_resp_set_type(r, "text/html");
+    httpd_resp_set_hdr(r, "Cache-Control", "no-store");
+    httpd_resp_sendstr_chunk(r, PAGE_HEAD);
+    httpd_resp_sendstr_chunk(r, PAGE_SETUP_TOP);
+    if (count == 0) {
+        httpd_resp_sendstr_chunk(r, s_scanning ? "<p>Scanning...</p>" : "<p>No networks found.</p>");
+    }
+    char name[SSID_MAX * 6 + 1], item[2 * sizeof(name) + 300];
+    for (int i = 0; i < count; i++) {
+        html_escape(aps[i].ssid, name, sizeof(name));
+        static const char *const BARS[] = {"", "&#9602;<i>&#9604;&#9606;&#9608;</i>",
+                                           "&#9602;&#9604;<i>&#9606;&#9608;</i>",
+                                           "&#9602;&#9604;&#9606;<i>&#9608;</i>", "&#9602;&#9604;&#9606;&#9608;"};
+        snprintf(item, sizeof(item),
+                 "<div class=ap data-s=\"%s\" onclick=p(this)><span class=b>%s</span><span class=n>%s</span>"
+                 "<span class=s>%d dBm %s</span></div>",
+                 name, BARS[signal_bars(aps[i].rssi)], name, aps[i].rssi,
+                 aps[i].secure ? "&#128274;" : "open");
+        httpd_resp_sendstr_chunk(r, item);
+    }
+    httpd_resp_sendstr_chunk(r, PAGE_SETUP_FORM);
+    return httpd_resp_sendstr_chunk(r, NULL);
+}
+
+static esp_err_t h_root(httpd_req_t *r) { return s_state == WIFI_SETUP ? send_setup_page(r) : send_page(r, PAGE_HOME); }
+
+static esp_err_t h_scan(httpd_req_t *r)
+{
+    if (s_state != WIFI_SETUP) {
+        return httpd_resp_send_err(r, HTTPD_403_FORBIDDEN, "Wi-Fi setup is not running");
+    }
+    esp_err_t err = send_page(r, PAGE_SCANNING);
+    s_scanning = true;
+    send_cmd(CMD_SCAN);
+    return err;
+}
 
 static void url_decode(const char *in, char *out, size_t n)
 {
@@ -372,6 +584,7 @@ static void http_start(void)
         {.uri = "/status", .method = HTTP_GET, .handler = h_status},
         {.uri = "/", .method = HTTP_GET, .handler = h_root},
         {.uri = "/save", .method = HTTP_POST, .handler = h_save},
+        {.uri = "/scan", .method = HTTP_GET, .handler = h_scan},
     };
     for (size_t i = 0; i < sizeof(URIS) / sizeof(URIS[0]); i++) {
         httpd_register_uri_handler(srv, &URIS[i]);
@@ -411,6 +624,7 @@ bool net_init(void)
      * serial link while joining; 11 dBm (units of 0.25 dBm) is plenty for a nearby AP */
     esp_wifi_set_max_tx_power(44);
 
+    s_scan_lock = xSemaphoreCreateMutex();
     http_start();
     s_q = xQueueCreate(4, sizeof(net_cmd_t));
     xTaskCreate(net_task, "net", 4096, NULL, 5, NULL);

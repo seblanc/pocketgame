@@ -51,6 +51,16 @@ int main(void)
     play_all(&g, (int[]){0, 2, 1, 4, 8, 6}, 6);
     assert(g.status == GAME_WIN && g.winner == CELL_O);
 
+    /* O starts a round: same draw sequence, marks swapped */
+    game_start(&g, CELL_O);
+    assert(g.turn == CELL_O && g.starter == CELL_O);
+    assert(game_play(&g, 0) == MOVE_OK && g.turn == CELL_X);
+    play_all(&g, (int[]){1, 2, 4, 3, 5, 7, 6, 8}, 8);
+    assert(g.status == GAME_DRAW);
+    game_board_str(&g, b);
+    assert(strcmp(b, "OXOOXXXOO") == 0);
+    assert(game_other(CELL_X) == CELL_O && game_other(CELL_O) == CELL_X);
+
     puts("game tests passed");
     return 0;
 }

@@ -9,7 +9,6 @@ typedef enum {
     HIT_YES,
     HIT_NO,
     HIT_SLIDER,     /* arg = volume 0..100 */
-    HIT_MUTE,
     HIT_WIFI_SETUP,
     HIT_WIFI_DONE,
 } hit_t;

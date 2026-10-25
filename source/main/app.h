@@ -23,8 +23,8 @@ typedef struct {
     int game_idx;
     game_t game;
     int wins_x, wins_o;
-    int vol; /* 0..100 */
-    bool mute;
+    uint8_t next_starter; /* who starts the next round: alternates after each finished one */
+    int vol;              /* 0..100, 0 = silent */
     int bat_mv, bat_pct;
     wifi_state_t wifi;
     char ip[16];

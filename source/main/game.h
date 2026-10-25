@@ -23,9 +23,13 @@ typedef struct {
     uint8_t winner;     /* valid when status == GAME_WIN */
     uint8_t win_line[3];
     uint8_t moves;
+    uint8_t starter;    /* CELL_X or CELL_O: who has the first move of this round */
 } game_t;
 
-void game_new(game_t *g);
+void game_new(game_t *g); /* X starts */
+void game_start(game_t *g, uint8_t first);
+/* CELL_X <-> CELL_O */
+uint8_t game_other(uint8_t mark);
 move_result_t game_play(game_t *g, int cell);
 /* "X.O......" style string, out must hold 10 bytes */
 void game_board_str(const game_t *g, char *out);

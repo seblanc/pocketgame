@@ -11,6 +11,14 @@
 #define COL_DIM RGB(110, 118, 132)
 #define COL_TEXT RGB(226, 230, 236)
 #define COL_ACCENT RGB(0, 214, 170)
+/* one colour per player: marks, scores and the turn banner */
+#define COL_X RGB(64, 150, 255)
+#define COL_O RGB(255, 72, 72)
+#define COL_X_DIM RGB(20, 46, 82)
+#define COL_O_DIM RGB(84, 24, 24)
+
+static uint16_t player_col(uint8_t mark) { return mark == CELL_X ? COL_X : COL_O; }
+static uint16_t player_dim(uint8_t mark) { return mark == CELL_X ? COL_X_DIM : COL_O_DIM; }
 
 typedef struct {
     int x, y, w, h;
@@ -38,14 +46,15 @@ static bool in_rect(rect_t r, int x, int y) { return x >= r.x && y >= r.y && x <
 static const rect_t BTN_NO = {20, 140, 94, 48};
 static const rect_t BTN_YES = {126, 140, 94, 48};
 
+/* turn banner above the grid */
+static const rect_t BANNER = {56, 5, 128, 28};
+
 /* settings */
 #define SL_X0 24
 #define SL_X1 216
-#define SL_Y 88
-static const rect_t SLIDER_AREA = {8, 68, 224, 42};
-static const rect_t TOGGLE = {176, 121, 44, 24};
-static const rect_t ROW_MUTE = {0, 114, 240, 40};
-static const rect_t BTN_SETUP = {140, 162, 84, 32};
+#define SL_Y 92
+static const rect_t SLIDER_AREA = {8, 70, 224, 46};
+static const rect_t BTN_SETUP = {140, 152, 84, 32};
 
 /* wifi setup */
 static const rect_t BTN_DONE = {70, 192, 100, 34};
@@ -108,11 +117,11 @@ static void ttt_icon(int x, int y, int s)
         gfx_rect(x, y + (int)(i * t), s, 1, COL_LINE);
     }
     float m = t * 0.25f;
-    gfx_line(x + m, y + m, x + t - m, y + t - m, 1.6f, COL_TEXT);
-    gfx_line(x + m, y + t - m, x + t - m, y + m, 1.6f, COL_TEXT);
-    gfx_ring(x + 1.5f * t, y + 1.5f * t, t * 0.3f, 1.6f, COL_ACCENT);
-    gfx_line(x + 2 * t + m, y + 2 * t + m, x + 3 * t - m, y + 3 * t - m, 1.6f, COL_TEXT);
-    gfx_line(x + 2 * t + m, y + 3 * t - m, x + 3 * t - m, y + 2 * t + m, 1.6f, COL_TEXT);
+    gfx_line(x + m, y + m, x + t - m, y + t - m, 1.6f, COL_X);
+    gfx_line(x + m, y + t - m, x + t - m, y + m, 1.6f, COL_X);
+    gfx_ring(x + 1.5f * t, y + 1.5f * t, t * 0.3f, 1.6f, COL_O);
+    gfx_line(x + 2 * t + m, y + 2 * t + m, x + 3 * t - m, y + 3 * t - m, 1.6f, COL_X);
+    gfx_line(x + 2 * t + m, y + 3 * t - m, x + 3 * t - m, y + 2 * t + m, 1.6f, COL_X);
 }
 
 static void draw_menu(const app_view_t *v)
@@ -142,22 +151,30 @@ static void draw_ttt(const app_view_t *v)
     const game_t *g = &v->game;
     char buf[16];
     snprintf(buf, sizeof(buf), "X %d", v->wins_x > 99 ? 99 : v->wins_x);
-    gfx_text(8, 12, buf, 2, COL_DIM);
+    gfx_text(8, 13, buf, 2, COL_X);
     snprintf(buf, sizeof(buf), "O %d", v->wins_o > 99 ? 99 : v->wins_o);
-    gfx_text_right(232, 12, buf, 2, COL_DIM);
+    gfx_text_right(232, 13, buf, 2, COL_O);
 
-    uint16_t tc;
+    /* turn banner, filled in the colour of the player it is about */
+    uint16_t tc, fill;
     if (g->status == GAME_WIN) {
         snprintf(buf, sizeof(buf), "%c WINS", game_mark_char(g->winner));
-        tc = g->winner == CELL_X ? COL_TEXT : COL_ACCENT;
+        tc = player_col(g->winner);
+        fill = player_dim(g->winner);
     } else if (g->status == GAME_DRAW) {
         snprintf(buf, sizeof(buf), "DRAW");
-        tc = COL_DIM;
+        tc = COL_TEXT;
+        fill = COL_LINE;
     } else {
-        snprintf(buf, sizeof(buf), "%c TURN", game_mark_char(g->turn));
-        tc = g->turn == CELL_X ? COL_TEXT : COL_ACCENT;
+        snprintf(buf, sizeof(buf), g->moves == 0 ? "%c STARTS" : "%c TO MOVE", game_mark_char(g->turn));
+        tc = player_col(g->turn);
+        fill = player_dim(g->turn);
     }
-    gfx_text_mid(SCREEN_W / 2, 12, buf, 2, tc);
+    rect_t b = BANNER;
+    gfx_rect(b.x + 2, b.y + 1, b.w - 4, b.h - 2, fill);
+    gfx_rect(b.x + 1, b.y + 2, b.w - 2, b.h - 4, fill);
+    gfx_rrect(b.x, b.y, b.w, b.h, 4, tc);
+    gfx_text_mid(b.x + b.w / 2, b.y + (b.h - 14) / 2, buf, 2, tc);
 
     int grid = 3 * CELL_PX;
     for (int i = 1; i < 3; i++) {
@@ -173,11 +190,11 @@ static void draw_ttt(const app_view_t *v)
                        (c == g->win_line[0] || c == g->win_line[1] || c == g->win_line[2]);
         bool dim = over && !on_line;
         if (g->cells[c] == CELL_X) {
-            uint16_t col = dim ? COL_LINE : COL_TEXT;
+            uint16_t col = dim ? COL_X_DIM : COL_X;
             gfx_line(cx - 17, cy - 17, cx + 17, cy + 17, 4, col);
             gfx_line(cx - 17, cy + 17, cx + 17, cy - 17, 4, col);
         } else if (g->cells[c] == CELL_O) {
-            gfx_ring(cx, cy, 19, 4, dim ? COL_LINE : COL_ACCENT);
+            gfx_ring(cx, cy, 19, 4, dim ? COL_O_DIM : COL_O);
         }
     }
 
@@ -205,27 +222,24 @@ static void draw_settings(const app_view_t *v)
     char buf[40];
     title("SETTINGS");
 
-    gfx_text(16, 54, "VOLUME", 2, COL_TEXT);
-    snprintf(buf, sizeof(buf), "%d", v->vol);
-    gfx_text_right(224, 54, buf, 2, v->mute ? COL_DIM : COL_ACCENT);
+    /* volume 0 is silent: there is no separate mute */
+    bool silent = v->vol == 0;
+    gfx_text(16, 56, "VOLUME", 2, COL_TEXT);
+    if (silent) {
+        snprintf(buf, sizeof(buf), "OFF");
+    } else {
+        snprintf(buf, sizeof(buf), "%d", v->vol);
+    }
+    gfx_text_right(224, 56, buf, 2, silent ? COL_DIM : COL_ACCENT);
     int kx = SL_X0 + (SL_X1 - SL_X0) * v->vol / 100;
-    uint16_t sc = v->mute ? COL_DIM : COL_ACCENT;
+    uint16_t sc = silent ? COL_DIM : COL_ACCENT;
     gfx_rect(SL_X0, SL_Y - 1, SL_X1 - SL_X0, 2, COL_LINE);
     gfx_rect(SL_X0, SL_Y - 1, kx - SL_X0, 2, sc);
     gfx_disc(kx, SL_Y, 7, sc);
-    hline(112);
+    gfx_text(SL_X0, SL_Y + 12, "0 = SILENT", 1, COL_DIM);
+    hline(124);
 
-    gfx_text(16, 126, "MUTE", 2, COL_TEXT);
-    gfx_rrect(TOGGLE.x, TOGGLE.y, TOGGLE.w, TOGGLE.h, TOGGLE.h / 2, v->mute ? COL_ACCENT : COL_LINE);
-    float ky = TOGGLE.y + TOGGLE.h / 2.0f;
-    if (v->mute) {
-        gfx_disc(TOGGLE.x + TOGGLE.w - 12, ky, 7, COL_ACCENT);
-    } else {
-        gfx_disc(TOGGLE.x + 12, ky, 7, COL_DIM);
-    }
-    hline(156);
-
-    gfx_text(16, 166, "WI-FI", 2, COL_TEXT);
+    gfx_text(16, 140, "WI-FI", 2, COL_TEXT);
     switch (v->wifi) {
     case WIFI_CONNECTED:
         snprintf(buf, sizeof(buf), "CONNECTED %s", v->ip);
@@ -243,7 +257,7 @@ static void draw_settings(const app_view_t *v)
         snprintf(buf, sizeof(buf), "NOT SET UP");
         break;
     }
-    gfx_text(16, 188, buf, 1, v->wifi == WIFI_CONNECTED ? COL_ACCENT : COL_DIM);
+    gfx_text(16, 194, buf, 1, v->wifi == WIFI_CONNECTED ? COL_ACCENT : COL_DIM);
     button(BTN_SETUP, "SET UP", COL_TEXT);
 
     snprintf(buf, sizeof(buf), "V %.12s", v->version);
@@ -357,9 +371,6 @@ hit_t ui_hit(const app_view_t *v, int x, int y, int *arg)
         if (in_rect(SLIDER_AREA, x, y)) {
             *arg = ui_slider_value(x);
             return HIT_SLIDER;
-        }
-        if (in_rect(ROW_MUTE, x, y)) {
-            return HIT_MUTE;
         }
         if (in_rect(BTN_SETUP, x, y)) {
             return HIT_WIFI_SETUP;

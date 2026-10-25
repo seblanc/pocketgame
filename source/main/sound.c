@@ -23,13 +23,12 @@ static const note_t TUNE_BAD[] = {{180, 140}, {0, 0}};
 static const note_t TUNE_WIN[] = {{523, 110}, {659, 110}, {784, 110}, {1047, 240}, {0, 0}};
 static const note_t TUNE_DRAW[] = {{440, 160}, {330, 260}, {0, 0}};
 static const note_t TUNE_NEW[] = {{880, 50}, {1175, 70}, {0, 0}};
-static const note_t TUNE_TICK[] = {{1320, 25}, {0, 0}};
+static const note_t TUNE_TICK[] = {{1320, 18}, {0, 0}}; /* short: one per scroll step */
 static const note_t *const TUNES[] = {TUNE_X, TUNE_O, TUNE_BAD, TUNE_WIN, TUNE_DRAW, TUNE_NEW, TUNE_TICK};
 
 static QueueHandle_t s_q;
 static i2s_chan_handle_t s_tx;
 static volatile int s_vol = 70;
-static volatile bool s_mute;
 
 static uint8_t dac_level(void) { return s_vol <= 0 ? 0 : (uint8_t)(DAC_MAX - (100 - s_vol) * DAC_RANGE / 100); }
 
@@ -160,10 +159,9 @@ const char *sound_init(void)
     return "es8311";
 }
 
-void sound_set_level(int vol, bool mute)
+void sound_set_level(int vol)
 {
     s_vol = vol < 0 ? 0 : vol > 100 ? 100 : vol;
-    s_mute = mute;
     if (s_tx) {
         i2cbus_write_reg(ES8311_ADDR, 0x32, dac_level());
     }
@@ -171,7 +169,13 @@ void sound_set_level(int vol, bool mute)
 
 void sound_play(sound_t s)
 {
-    if (s_q && !s_mute && s_vol > 0) {
-        xQueueSend(s_q, &s, 0);
+    if (!s_q || s_vol <= 0) {
+        return; /* volume 0 is silent */
     }
+    /* ticks come in bursts while dragging: drop one while sound is still queued, so
+     * the ticks follow the finger instead of piling up after it stops */
+    if (s == SND_TICK && uxQueueMessagesWaiting(s_q) > 0) {
+        return;
+    }
+    xQueueSend(s_q, &s, 0);
 }
