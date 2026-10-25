@@ -1,10 +1,11 @@
 #pragma once
 #include <stdbool.h>
-#include "board.h"
+#include <stdint.h>
 
-/* Starts the touch controller; returns false if there is none. */
-bool touch_init(const touch_info_t *t);
+/* Resets the touch panel on the shared I2C bus and identifies its controller by
+ * address; returns false if none answers. */
+bool touch_init(void);
+const char *touch_chip(void);
+uint8_t touch_addr(void);
 /* Polls once; true with the coordinates on a new press (finger down edge). */
 bool touch_poll_press(int *x, int *y);
-/* Finger on the glass at the last poll. */
-bool touch_is_down(void);

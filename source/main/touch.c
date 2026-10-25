@@ -1,45 +1,78 @@
 #include "touch.h"
-#include "bbi2c.h"
+#include "board.h"
+#include "display.h"
 #include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "i2cbus.h"
 
-static bbi2c_t s_bus;
-static touch_info_t s_info;
+/* The schematic does not name the touch controller, so it is told apart by
+ * address. 0x2E (CHSC6x) answered on this board's bus. */
+typedef enum { TP_NONE, TP_CST816, TP_FT6X36, TP_CHSC6X } tp_kind_t;
+
+static const struct {
+    uint8_t addr;
+    tp_kind_t kind;
+    const char *name;
+} CHIPS[] = {
+    {0x2E, TP_CHSC6X, "CHSC6x"},
+    {0x15, TP_CST816, "CST816"},
+    {0x38, TP_FT6X36, "FT6x36"},
+};
+
+static tp_kind_t s_kind = TP_NONE;
+static uint8_t s_addr;
+static const char *s_name = "none";
 static bool s_down;
 
-bool touch_init(const touch_info_t *t)
+bool touch_init(void)
 {
-    s_info = *t;
-    if (t->kind == TOUCH_NONE) {
-        return false;
+    gpio_reset_pin(TP_INT);
+    gpio_set_direction(TP_INT, GPIO_MODE_INPUT);
+    gpio_set_pull_mode(TP_INT, GPIO_PULLUP_ONLY);
+    gpio_reset_pin(TP_RST);
+    gpio_set_direction(TP_RST, GPIO_MODE_OUTPUT);
+    gpio_set_level(TP_RST, 0);
+    vTaskDelay(pdMS_TO_TICKS(20));
+    gpio_set_level(TP_RST, 1);
+    vTaskDelay(pdMS_TO_TICKS(150));
+
+    for (size_t i = 0; i < sizeof(CHIPS) / sizeof(CHIPS[0]); i++) {
+        if (i2cbus_probe(CHIPS[i].addr)) {
+            s_kind = CHIPS[i].kind;
+            s_addr = CHIPS[i].addr;
+            s_name = CHIPS[i].name;
+            break;
+        }
     }
-    if (t->rst >= 0) {
-        gpio_reset_pin(t->rst);
-        gpio_set_direction(t->rst, GPIO_MODE_OUTPUT);
-        gpio_set_level(t->rst, 0);
-        vTaskDelay(pdMS_TO_TICKS(10));
-        gpio_set_level(t->rst, 1);
-        vTaskDelay(pdMS_TO_TICKS(80));
-    }
-    bbi2c_init(&s_bus, t->sda, t->scl, 4);
-    bbi2c_recover(&s_bus);
-    if (t->kind == TOUCH_CST816) {
+    if (s_kind == TP_CST816) {
         /* keep it awake: a sleeping CST816 does not answer polls */
-        bbi2c_write_reg8(&s_bus, t->addr, 0xFE, 0x01);
+        i2cbus_write_reg(s_addr, 0xFE, 0x01);
     }
-    return bbi2c_probe(&s_bus, t->addr) || t->kind == TOUCH_CST816;
+    return s_kind != TP_NONE;
 }
+
+const char *touch_chip(void) { return s_name; }
+uint8_t touch_addr(void) { return s_addr; }
 
 /* finger count and first point; false when nothing could be read */
 static bool read_point(int *n, int *x, int *y)
 {
     uint8_t d[5] = {0};
-    switch (s_info.kind) {
-    case TOUCH_CST816:
-    case TOUCH_FT6X36:
+    switch (s_kind) {
+    case TP_CHSC6X:
+        /* plain 5-byte read: points, -, X, -, Y */
+        if (!i2cbus_read(s_addr, d, 5)) {
+            return false;
+        }
+        *n = d[0] == 1 ? 1 : 0;
+        *x = d[2];
+        *y = d[4];
+        return true;
+    case TP_CST816:
+    case TP_FT6X36:
         /* both: 0x02 points, 0x03..0x06 XH XL YH YL */
-        if (!bbi2c_read_reg8(&s_bus, s_info.addr, 0x02, d, 5)) {
+        if (!i2cbus_read_reg(s_addr, 0x02, d, 5)) {
             return false;
         }
         *n = d[0] & 0x0F;
@@ -49,37 +82,19 @@ static bool read_point(int *n, int *x, int *y)
             *n = 0;
         }
         return true;
-    case TOUCH_GT911: {
-        uint8_t st;
-        if (!bbi2c_read_reg16(&s_bus, s_info.addr, 0x814E, &st, 1)) {
-            return false;
-        }
-        if (!(st & 0x80)) {
-            *n = s_down ? 1 : 0; /* no fresh data: keep last state */
-            *x = *y = 0;
-            return true;
-        }
-        *n = st & 0x0F;
-        if (*n > 0 && !bbi2c_read_reg16(&s_bus, s_info.addr, 0x8150, d, 4)) {
-            return false;
-        }
-        bbi2c_write_reg16(&s_bus, s_info.addr, 0x814E, 0);
-        *x = d[0] | (d[1] << 8);
-        *y = d[2] | (d[3] << 8);
-        return true;
-    }
     default:
         return false;
     }
 }
-
-bool touch_is_down(void) { return s_down; }
 
 bool touch_poll_press(int *x, int *y)
 {
     int n = 0, px = 0, py = 0;
     if (!read_point(&n, &px, &py)) {
         n = 0; /* asleep or no data: treat as released */
+    }
+    if (px >= SCREEN_W || py >= SCREEN_H) {
+        n = 0; /* noise outside the glass */
     }
     bool press = n > 0 && !s_down;
     s_down = n > 0;

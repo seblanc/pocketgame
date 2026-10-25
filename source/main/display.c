@@ -1,5 +1,7 @@
 #include "display.h"
 #include <math.h>
+#include <stdbool.h>
+#include "board.h"
 #include <stdio.h>
 #include <string.h>
 #include "driver/gpio.h"
@@ -27,8 +29,6 @@
 static esp_lcd_panel_handle_t s_panel;
 static SemaphoreHandle_t s_done;
 static uint16_t *s_fb; /* SCREEN_W x SCREEN_H, byte-swapped RGB565 for the SPI bus */
-static int s_y_offset;
-static int s_panel_h;
 
 static bool on_trans_done(esp_lcd_panel_io_handle_t io, esp_lcd_panel_io_event_data_t *e, void *ctx)
 {
@@ -46,7 +46,7 @@ static void push_rows(int panel_y, const uint16_t *src, int lines)
 static void fb_flush(void)
 {
     for (int y = 0; y < SCREEN_H; y += CHUNK_LINES) {
-        push_rows(s_y_offset + y, s_fb + y * SCREEN_W, CHUNK_LINES);
+        push_rows(y, s_fb + y * SCREEN_W, CHUNK_LINES);
     }
 }
 
@@ -149,10 +149,7 @@ void display_render(const view_t *v)
     draw_text(SCREEN_W - 4 - text_width(buf, 2), 12, buf, 2, COL_O);
 
     uint16_t tc = COL_TEXT;
-    if (v->calibrating) {
-        snprintf(buf, sizeof(buf), "TAP ME");
-        tc = COL_WIN;
-    } else if (g->status == GAME_WIN) {
+    if (g->status == GAME_WIN) {
         snprintf(buf, sizeof(buf), "%c WINS!", game_mark_char(g->winner));
         tc = g->winner == CELL_X ? COL_X : COL_O;
     } else if (g->status == GAME_DRAW) {
@@ -196,38 +193,23 @@ void display_render(const view_t *v)
     fb_flush();
 }
 
-esp_err_t display_init(const board_profile_t *p)
+esp_err_t display_init(void)
 {
+    /* backlight off until the first frame is on the glass */
+    gpio_reset_pin(LCD_BL);
+    gpio_set_direction(LCD_BL, GPIO_MODE_OUTPUT);
+    gpio_set_level(LCD_BL, 0);
+
     s_done = xSemaphoreCreateBinary();
     s_fb = heap_caps_malloc(SCREEN_W * SCREEN_H * sizeof(uint16_t), MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
     if (!s_fb) {
         return ESP_ERR_NO_MEM;
     }
 
-    /* lines the panel needs at a fixed level (found by the pin search) */
-    for (int i = 0; i < p->n_hold_hi; i++) {
-        gpio_reset_pin(p->hold_hi[i]);
-        gpio_set_level(p->hold_hi[i], 0);
-        gpio_set_direction(p->hold_hi[i], GPIO_MODE_OUTPUT);
-    }
-    for (int i = 0; i < p->n_hold_lo; i++) {
-        gpio_reset_pin(p->hold_lo[i]);
-        gpio_set_level(p->hold_lo[i], 0);
-        gpio_set_direction(p->hold_lo[i], GPIO_MODE_OUTPUT);
-    }
-    if (p->n_hold_hi) {
-        /* without a single reset line, pulse all of them as one */
-        vTaskDelay(pdMS_TO_TICKS(10));
-        for (int i = 0; i < p->n_hold_hi; i++) {
-            gpio_set_level(p->hold_hi[i], 1);
-        }
-        vTaskDelay(pdMS_TO_TICKS(120));
-    }
-
     spi_bus_config_t bus = {
-        .mosi_io_num = p->lcd_mosi,
+        .mosi_io_num = LCD_MOSI,
         .miso_io_num = -1,
-        .sclk_io_num = p->lcd_sclk,
+        .sclk_io_num = LCD_SCLK,
         .quadwp_io_num = -1,
         .quadhd_io_num = -1,
         .max_transfer_sz = SCREEN_W * CHUNK_LINES * sizeof(uint16_t) + 8,
@@ -239,9 +221,9 @@ esp_err_t display_init(const board_profile_t *p)
 
     esp_lcd_panel_io_handle_t io;
     esp_lcd_panel_io_spi_config_t io_cfg = {
-        .dc_gpio_num = p->lcd_dc,
-        .cs_gpio_num = p->lcd_cs,
-        .pclk_hz = 20 * 1000 * 1000, /* unknown board wiring: stay well inside the ST7789 limit */
+        .dc_gpio_num = LCD_DC,
+        .cs_gpio_num = LCD_CS,
+        .pclk_hz = 40 * 1000 * 1000,
         .lcd_cmd_bits = 8,
         .lcd_param_bits = 8,
         .spi_mode = 0,
@@ -254,7 +236,7 @@ esp_err_t display_init(const board_profile_t *p)
     }
 
     esp_lcd_panel_dev_config_t panel_cfg = {
-        .reset_gpio_num = p->lcd_rst,
+        .reset_gpio_num = LCD_RST,
         .rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB,
         .bits_per_pixel = 16,
     };
@@ -264,17 +246,13 @@ esp_err_t display_init(const board_profile_t *p)
     }
     esp_lcd_panel_reset(s_panel);
     esp_lcd_panel_init(s_panel);
-    esp_lcd_panel_invert_color(s_panel, p->invert);
-    esp_lcd_panel_set_gap(s_panel, p->gap_x, p->gap_y);
+    esp_lcd_panel_invert_color(s_panel, true); /* IPS panels need inverted colours */
     esp_lcd_panel_disp_on_off(s_panel, true);
 
-    /* taller panels: clear the whole glass, then centre the 240x240 view */
-    s_panel_h = p->lcd_h > SCREEN_H ? p->lcd_h : SCREEN_H;
-    s_y_offset = (s_panel_h - SCREEN_H) / 2;
     memset(s_fb, 0, SCREEN_W * CHUNK_LINES * sizeof(uint16_t));
-    for (int y = 0; y < s_panel_h; y += CHUNK_LINES) {
-        int lines = s_panel_h - y < CHUNK_LINES ? s_panel_h - y : CHUNK_LINES;
-        push_rows(y, s_fb, lines);
+    for (int y = 0; y < SCREEN_H; y += CHUNK_LINES) {
+        push_rows(y, s_fb, CHUNK_LINES);
     }
-    return ESP_OK; /* the backlight is switched by backlight.c */
+    gpio_set_level(LCD_BL, 1);
+    return ESP_OK;
 }

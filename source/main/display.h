@@ -1,5 +1,4 @@
 #pragma once
-#include "board.h"
 #include "esp_err.h"
 #include "game.h"
 
@@ -14,10 +13,10 @@
 typedef struct {
     game_t game;
     int wins_x, wins_o;
-    bool calibrating; /* backlight search running: the next tap confirms the lit screen */
 } view_t;
 
-esp_err_t display_init(const board_profile_t *p);
+/* Starts the ST7789 panel, clears it and switches the backlight on. */
+esp_err_t display_init(void);
 void display_render(const view_t *v);
 /* cell index under screen point, or -1 */
 int display_cell_at(int x, int y);
