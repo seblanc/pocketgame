@@ -29,6 +29,12 @@ void scroll_reset(scroller_t *s, int view_h, int content_h)
     s->held = false;
 }
 
+void scroll_resize(scroller_t *s, int view_h, int content_h)
+{
+    s->view = view_h > 1 ? (float)view_h : 1.0f;
+    s->max = content_h > view_h ? (float)(content_h - view_h) : 0.0f;
+}
+
 void scroll_press(scroller_t *s, int y, uint32_t now_ms)
 {
     s->held = true;

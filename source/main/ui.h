@@ -25,5 +25,6 @@ void ui_render(const app_view_t *v);
 hit_t ui_hit(const app_view_t *v, int x, int y, int *arg);
 /* volume for a finger at x on the slider */
 int ui_slider_value(int x);
-/* the scrolling list of screen s (menu, settings): false if it has none */
-bool ui_list_size(screen_t s, int *view_h, int *content_h);
+/* the scrolling list of screen s (menu, settings): false if it has none. The menu's
+ * view grows as its hint banner slides away by hint_dy px. */
+bool ui_list_size(screen_t s, int hint_dy, int *view_h, int *content_h);

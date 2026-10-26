@@ -42,7 +42,9 @@ typedef struct {
     bool off_idle;    /* the off screen is for the idle power-off, not the power key */
 } app_view_t;
 
-#define HINT_SLIDE_PX 16
+/* the hint banner's height at the bottom of the menu: it slides down this far to be
+ * gone, and the game list grows by as much */
+#define HINT_SLIDE_PX 24
 
 /* human-readable firmware version, defined once in source/CMakeLists.txt */
 #ifndef FW_VERSION

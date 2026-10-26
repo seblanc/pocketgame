@@ -29,6 +29,10 @@ static bool in_rect(rect_t r, int x, int y) { return x >= r.x && y >= r.y && x <
 #define TILE_W 208
 #define TILE_H 80
 #define TILE_GAP 8
+#define COL_BANNER RGB(22, 26, 34)
+
+/* the menu list ends at the top of the "hold L + R" banner, the screen bottom once it is gone */
+static int menu_y1(int hint_dy) { return SCREEN_H - HINT_SLIDE_PX + hint_dy; }
 
 /* confirm */
 static const rect_t BTN_NO = {20, 140, 94, 48};
@@ -142,10 +146,11 @@ static void draw_bar(const app_view_t *v)
 static void draw_menu(const app_view_t *v)
 {
     draw_bar(v);
-    gfx_clip_y(MENU_Y0, LIST_Y1);
+    int y1 = menu_y1(v->hint_dy);
+    gfx_clip_y(MENU_Y0, y1);
     for (int i = 0; i < GAME_COUNT; i++) {
         rect_t r = at(tile_rect(i), MENU_Y0, v->menu_scroll);
-        if (r.y + r.h < MENU_Y0 || r.y >= LIST_Y1) {
+        if (r.y + r.h < MENU_Y0 || r.y >= y1) {
             continue;
         }
         gfx_rrect(r.x, r.y, r.w, r.h, 12, COL_LINE);
@@ -156,8 +161,11 @@ static void draw_menu(const app_view_t *v)
     }
     gfx_clip_y(0, SCREEN_H);
     if (v->hint_dy < HINT_SLIDE_PX) {
-        /* slides down off the bottom edge a few seconds after the menu opens */
-        gfx_text_mid(SCREEN_W / 2, 226 + v->hint_dy, "HOLD L + R FOR SETTINGS", 1, COL_DIM);
+        /* the whole banner, strip and text, slides down off the bottom edge a few
+         * seconds after the menu opens; the screen edge clips it */
+        gfx_rect(0, y1, SCREEN_W, HINT_SLIDE_PX, COL_BANNER);
+        hline(y1);
+        gfx_text_mid(SCREEN_W / 2, y1 + 9, "HOLD L + R FOR SETTINGS", 1, COL_DIM);
     }
 }
 
@@ -453,10 +461,10 @@ void ui_render(const app_view_t *v)
     display_flush();
 }
 
-bool ui_list_size(screen_t s, int *view_h, int *content_h)
+bool ui_list_size(screen_t s, int hint_dy, int *view_h, int *content_h)
 {
     if (s == SCR_MENU) {
-        *view_h = LIST_Y1 - MENU_Y0;
+        *view_h = menu_y1(hint_dy) - MENU_Y0;
         *content_h = menu_h();
         return true;
     }
@@ -478,7 +486,7 @@ hit_t ui_hit(const app_view_t *v, int x, int y, int *arg)
 {
     switch (v->screen) {
     case SCR_MENU:
-        if (y < MENU_Y0 || y >= LIST_Y1) {
+        if (y < MENU_Y0 || y >= menu_y1(v->hint_dy)) {
             return HIT_NONE;
         }
         for (int i = 0; i < GAME_COUNT; i++) {

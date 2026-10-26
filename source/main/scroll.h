@@ -17,6 +17,8 @@ typedef struct {
 } scroller_t;
 
 void scroll_reset(scroller_t *s, int view_h, int content_h);
+/* a new viewport height, keeping the offset (the edge spring pulls it back in range) */
+void scroll_resize(scroller_t *s, int view_h, int content_h);
 /* finger down at y; stops a glide */
 void scroll_press(scroller_t *s, int y, uint32_t now_ms);
 void scroll_drag(scroller_t *s, int y, uint32_t now_ms);

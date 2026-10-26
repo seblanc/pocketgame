@@ -9,12 +9,15 @@
  * Buttons: a short press on LEFT goes back (asking first while a game is running);
  * holding LEFT + RIGHT for 3 s opens Settings. The middle button is only the power
  * key: holding it 3 s powers the board off (or sleeps it on USB). The home menu's
- * "hold L + R" hint slides down off the screen 3 s after the menu opens.
+ * "hold L + R" banner slides down off the screen 3 s after the menu opens, and the
+ * game list grows into the space it leaves.
  *
- * Idle power-off: 60 s without a touch or a button press (a running motion game's
- * tilt counts too; the console does not) releases the battery latch. Plugged into a
- * computer the board stays powered, so it only switches the display off until the
- * next touch or key; on a charger without a computer it deep-sleeps until the power key.
+ * Idle power-off, on battery only: 60 s without a touch or a button press (a running
+ * motion game's tilt counts too; the console does not) shows the off screen and
+ * releases the battery latch. On USB power the board stays on with the screen lit: a
+ * computer is recognised by its start-of-frame packets, a plain charger by the board
+ * still running once the latch is released (the off screen shows once, then it comes
+ * back and later timeouts only check the latch quietly).
  *
  * Serial protocol (USB Serial/JTAG console, one command per line):
  *   new | board                a new round / the board of the game on screen (tic-tac-toe
@@ -34,7 +37,8 @@
  *                              events and one state line (BALL | BUBBLE | POTATO ...);
  *                              from then on the round ignores the sensor and the clock
  *   sim idle <ms> | sim touch  any screen: the idle timer jumps ahead (SIM idle=ms) / a
- *                              touch (INPUT touch; wakes a dark board: POWER wake ...)
+ *                              touch (INPUT touch); on USB a timeout replies
+ *                              POWER usb: auto-off disabled and the board stays on
  *   imu                        IMU ax=.. ay=.. az=.. raw_ax=.. (mg; ax is the games' X axis,
  *                              the raw one inverted) | ERR imu not found
  *   rules                      the help screen of the game on screen (Hot Potato):
@@ -46,7 +50,8 @@
  *                              UPDATE result=newer|same|older latest=.. current=.. | UPDATE ERR ..;
  *                              install flashes its pocketgame.bin
  *   status                     STATUS screen=menu bat=.. mv=.. wifi=.. ip=.. starter=X vol=.. fw=v..
- *                              idle=s/60s power=on|off|dark hint=shown|sliding|hidden
+ *                              idle=s/60s power=on|off autooff=on|off (off: on USB)
+ *                              hint=shown|sliding|hidden
  *   open <id> | back | yes | no | settings      navigation, replies SCREEN ...
  *   vol <0-100>                                 VOL n (saved in NVS, 0 = silent)
  *   wifi [ssid | pass | scan | setup | stop | forget]  ssid/pass ask SSID? / PASS? and
@@ -114,12 +119,18 @@ static app_view_t s_v;                    /* under s_lock */
 static screen_t s_settings_from = SCR_MENU; /* where Settings returns to */
 static bool s_sim[GAME_MAX];              /* under s_lock: the round is driven over UART */
 
-/* power: on; off = the idle power-off is under way; dark = released the latch but USB
- * keeps the board running, display off until the next touch or key */
-typedef enum { PWR_ON, PWR_OFF, PWR_DARK } power_t;
-static const char *const POWER_NAMES[] = {"on", "off", "dark"};
+/* power: on; off = the idle power-off (or its latch check) is under way */
+typedef enum { PWR_ON, PWR_OFF } power_t;
+static const char *const POWER_NAMES[] = {"on", "off"};
 static power_t s_power;     /* under s_lock */
 static uint32_t s_input_ms; /* under s_lock: the last touch or key, the idle timer's start */
+/* USB power: a computer sent a start-of-frame within USB_SOF_MS, or the board kept
+ * running with its battery latch released (a charger) */
+#define USB_SOF_MS 3000
+static bool s_sof_seen;      /* under s_lock */
+static uint32_t s_sof_ms;    /* under s_lock: the last start-of-frame seen */
+static bool s_usb_charger;   /* under s_lock */
+static bool usb_power_locked(uint32_t now);
 
 /* the menu hint: shown when the menu opens, slides off after HINT_SHOW_MS */
 typedef enum { HINT_SHOWN, HINT_SLIDING, HINT_HIDDEN } hint_t;
@@ -474,11 +485,13 @@ static void print_status(void)
     lock();
     power_t pwr = s_power;
     hint_t hint = s_hint;
+    bool usb = usb_power_locked(now_ms());
     unlock();
-    out("STATUS screen=%s game=%s bat=%d mv=%d wifi=%s ip=%s starter=%c vol=%d fw=%s idle=%u/%ds power=%s hint=%s",
+    out("STATUS screen=%s game=%s bat=%d mv=%d wifi=%s ip=%s starter=%c vol=%d fw=%s idle=%u/%ds power=%s autooff=%s "
+        "hint=%s",
         SCREEN_NAMES[v.screen], GAMES[v.game_idx]->id, v.bat_pct, v.bat_mv, net_state_name(v.wifi),
         v.ip[0] ? v.ip : "-", game_mark_char(game_round(v.games[v.game_idx].st.bytes)->starter), v.vol, FW_VERSION,
-        idle_s(), IDLE_OFF_MS / 1000, POWER_NAMES[pwr], HINT_NAMES[hint]);
+        idle_s(), IDLE_OFF_MS / 1000, POWER_NAMES[pwr], usb ? "off" : "on", HINT_NAMES[hint]);
 }
 
 void app_status_json(char *buf, size_t n)
@@ -487,12 +500,14 @@ void app_status_json(char *buf, size_t n)
     snapshot(&v);
     lock();
     power_t pwr = s_power;
+    bool usb = usb_power_locked(now_ms());
     unlock();
     snprintf(buf, n,
              "{\"app\":\"pocketgame\",\"fw\":\"%s\",\"version\":\"%s\",\"screen\":\"%s\",\"games\":%d,"
-             "\"battery\":{\"mv\":%d,\"pct\":%d},\"wifi\":\"%s\",\"ip\":\"%s\",\"vol\":%d,\"idle_s\":%u,\"power\":\"%s\"}",
+             "\"battery\":{\"mv\":%d,\"pct\":%d},\"wifi\":\"%s\",\"ip\":\"%s\",\"vol\":%d,\"idle_s\":%u,\"power\":\"%s\","
+             "\"autooff\":%s}",
              FW_VERSION, v.version, SCREEN_NAMES[v.screen], GAME_COUNT, v.bat_mv, v.bat_pct, net_state_name(v.wifi), v.ip,
-             v.vol, idle_s(), POWER_NAMES[pwr]);
+             v.vol, idle_s(), POWER_NAMES[pwr], usb ? "false" : "true");
 }
 
 static void read_battery(void)
@@ -511,13 +526,25 @@ static void read_battery(void)
 
 /* ---- power: idle power-off ---- */
 
-/* Is a computer on the USB port? Its host sends a start-of-frame every millisecond,
- * whose number the USB Serial/JTAG block keeps. */
-static bool usb_host_connected(void)
+/* Every timer tick, under the lock: a computer's host sends a start-of-frame every
+ * millisecond, whose 11-bit number the USB Serial/JTAG block keeps; a charger sends none. */
+static void usb_sof_watch_locked(uint32_t now)
 {
-    uint32_t a = USB_SERIAL_JTAG.fram_num.sof_frame_index;
-    vTaskDelay(pdMS_TO_TICKS(5));
-    return USB_SERIAL_JTAG.fram_num.sof_frame_index != a;
+    static bool started;
+    static uint32_t last;
+    uint32_t f = USB_SERIAL_JTAG.fram_num.sof_frame_index;
+    if (started && f != last) {
+        s_sof_seen = true;
+        s_sof_ms = now;
+    }
+    started = true;
+    last = f;
+}
+
+/* on USB power: no idle power-off, no dark display */
+static bool usb_power_locked(uint32_t now)
+{
+    return s_usb_charger || (s_sof_seen && now - s_sof_ms < USB_SOF_MS);
 }
 
 /* With the latch released but USB power on: sleep until the power key is pressed.
@@ -535,25 +562,16 @@ static void sleep_until_power_key(void)
 }
 
 /* A touch or key press: restarts the idle timer. Returns true when it was used up by
- * the power state (it woke the dark board, or the board is switching off), so it must
- * not act on the screen. */
+ * the power state (the board is switching off), so it must not act on the screen. */
 static bool app_input(const char *src)
 {
+    (void)src;
     lock();
     power_t was = s_power;
-    if (was != PWR_OFF) {
+    if (was == PWR_ON) {
         s_input_ms = now_ms();
     }
-    if (was == PWR_DARK) {
-        s_power = PWR_ON;
-    }
     unlock();
-    if (was == PWR_DARK) {
-        gpio_set_level(BAT_EN, 1); /* latched again: pulling USB no longer cuts the power */
-        gpio_set_level(LCD_BL, 1);
-        out("POWER wake reason=%s", src);
-        request_redraw();
-    }
     return was != PWR_ON;
 }
 
@@ -567,34 +585,42 @@ static void keep_awake(void)
     unlock();
 }
 
-/* 60 s without input. With a computer on USB (which powers the board whatever the
- * latch) the display just goes dark, so the serial console, Wi-Fi and over-the-air
- * updates keep working; otherwise the off screen, then the latch is released: on
- * battery the power goes, on a charger the board deep-sleeps until the power key. */
+/* 60 s without input and no computer seen on USB: the off screen, then the latch is
+ * released, so on battery the power goes. Still running afterwards means a charger:
+ * latched again, the screen comes back and auto-off stays disabled. A known charger
+ * is only checked quietly (screen lit), in case it was pulled since. */
 static void idle_power_off(void)
 {
-    out("POWER off reason=idle after=%ds", IDLE_OFF_MS / 1000);
-    if (usb_host_connected()) {
-        gpio_set_level(LCD_BL, 0);
-        gpio_set_level(BAT_EN, 0);
-        lock();
-        s_power = PWR_DARK;
-        unlock();
-        out("POWER usb: display off, waiting for input");
-        return;
-    }
     lock();
-    s_v.off_idle = true;
-    show_locked(SCR_OFF);
+    bool quiet = s_usb_charger;
+    screen_t was = s_v.screen;
+    if (!quiet) {
+        s_v.off_idle = true;
+        show_locked(SCR_OFF);
+    }
     unlock();
-    sound_play(SND_TICK);
-    vTaskDelay(pdMS_TO_TICKS(1500)); /* let the off screen be seen */
-    gpio_set_level(LCD_BL, 0);
+    if (!quiet) {
+        out("POWER off reason=idle after=%ds", IDLE_OFF_MS / 1000);
+        sound_play(SND_TICK);
+        vTaskDelay(pdMS_TO_TICKS(1500)); /* let the off screen be seen */
+        gpio_set_level(LCD_BL, 0);
+    }
     gpio_set_level(BAT_EN, 0);
     vTaskDelay(pdMS_TO_TICKS(800));
-    /* still running: powered over USB by a charger */
-    out("POWER usb: no computer, sleeping until the power key is pressed");
-    sleep_until_power_key();
+    /* still running: powered over USB */
+    gpio_set_level(BAT_EN, 1);
+    gpio_set_level(LCD_BL, 1);
+    lock();
+    s_usb_charger = true;
+    if (!quiet) {
+        s_v.screen = was; /* quietly: the menu keeps its hint state */
+        s_v.off_idle = false;
+    }
+    s_input_ms = now_ms();
+    s_power = PWR_ON;
+    unlock();
+    out("POWER usb: auto-off disabled");
+    request_redraw();
 }
 
 /* the menu hint's slide (ease-in) and the idle timer */
@@ -612,6 +638,7 @@ static void timer_task(void *arg)
         bool redraw = false;
         lock();
         uint32_t now = now_ms(); /* under the lock: never before a time another task just set */
+        usb_sof_watch_locked(now);
         if (s_v.screen == SCR_MENU && s_hint != HINT_HIDDEN) {
             uint32_t t = now - s_hint_at;
             int dy = 0;
@@ -624,17 +651,28 @@ static void timer_task(void *arg)
                 dy = HINT_SLIDE_PX;
                 s_hint = HINT_HIDDEN;
                 out("HINT settings hide ms=%lu", (unsigned long)t);
+                int from, h, content_h;
+                ui_list_size(SCR_MENU, 0, &from, &content_h);
+                ui_list_size(SCR_MENU, HINT_SLIDE_PX, &h, &content_h);
+                out("MENU list grow h=%d from=%d", h, from);
             }
             redraw = dy != s_v.hint_dy;
             s_v.hint_dy = dy;
         }
         bool idle = s_power == PWR_ON && now - s_input_ms >= IDLE_OFF_MS;
-        if (idle) {
+        bool usb = idle && usb_power_locked(now) && !s_usb_charger; /* a charger is checked below */
+        if (usb) {
+            idle = false;
+            s_input_ms = now; /* the timer starts over; the board stays on, screen lit */
+        } else if (idle) {
             s_power = PWR_OFF;
         }
         unlock();
         if (redraw) {
             request_redraw();
+        }
+        if (usb) {
+            out("POWER usb: auto-off disabled");
         }
         if (idle) {
             idle_power_off();
@@ -1062,24 +1100,33 @@ static void touch_task(void *arg)
     int press_x = 0, press_y = 0;
     uint32_t last_tick = 0, last_ms = now_ms();
     screen_t shown = SCR_OFF;
+    int shown_dy = -1;
     scroller_t *sc = NULL;
     for (;;) {
         lock();
         screen_t scr = s_v.screen;
+        int hint_dy = s_v.hint_dy;
         unlock();
         if (scr != shown) {
             /* a list starts at its top each time its screen opens */
             shown = scr;
+            shown_dy = hint_dy;
             sc = list_of(scr);
             if (sc) {
                 int view_h, content_h;
-                ui_list_size(scr, &view_h, &content_h);
+                ui_list_size(scr, hint_dy, &view_h, &content_h);
                 scroll_reset(sc, view_h, content_h);
                 publish_scroll(scr, sc);
             }
             slider = false;
             aim = false; /* the preview went with the screen change */
             pending = HIT_NONE;
+        } else if (sc && scr == SCR_MENU && hint_dy != shown_dy) {
+            /* the hint banner slides away: the game list grows into its space */
+            shown_dy = hint_dy;
+            int view_h, content_h;
+            ui_list_size(scr, hint_dy, &view_h, &content_h);
+            scroll_resize(sc, view_h, content_h);
         }
 
         int x = 0, y = 0;
@@ -1252,7 +1299,7 @@ static void power_off(void)
     s_v.off_idle = false;
     show_locked(SCR_OFF);
     unlock();
-    gpio_set_level(LCD_BL, 1); /* the key also switches off a dark board */
+    gpio_set_level(LCD_BL, 1);
     out("POWER off: release the power key");
     vTaskDelay(pdMS_TO_TICKS(300)); /* let the screen draw */
     while (gpio_get_level(KEY_PWR) == 0) {
@@ -1310,7 +1357,7 @@ static void button_task(void *arg)
             if (d) {
                 out("BTN %s down gpio=%d", NAMES[i], PINS[i]);
                 down_at[i] = now;
-                /* a press that wakes the dark display does nothing else */
+                /* a press while the board is switching off does nothing else */
                 used[i] = app_input("button");
             } else {
                 bool short_press = !used[i] && now - down_at[i] < pdMS_TO_TICKS(SHORT_PRESS_MS);
@@ -1409,7 +1456,7 @@ void app_main(void)
         out("IMU NONE: no QMI8658 at 0x%02x (motion games run without the sensor)", IMU_ADDR);
     }
 
-    out("KEYS left=%d right=%d pwr=%d (pwr: hold 3 s to power off; idle off after %d s)", KEY_LEFT, KEY_RIGHT,
+    out("KEYS left=%d right=%d pwr=%d (pwr: hold 3 s to power off; idle off after %d s on battery)", KEY_LEFT, KEY_RIGHT,
         KEY_PWR, IDLE_OFF_MS / 1000);
 
     settings_init();
