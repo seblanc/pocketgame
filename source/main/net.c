@@ -13,6 +13,7 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "lwip/sockets.h"
+#include "ota.h"
 #include "settings.h"
 
 #define AP_IP "192.168.4.1"
@@ -581,6 +582,7 @@ static void http_start(void)
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.lru_purge_enable = true;
     cfg.stack_size = 6144;
+    cfg.max_uri_handlers = 12; /* ours, the OTA ones and NOSTROMO's contract */
     if (httpd_start(&srv, &cfg) != ESP_OK) {
         app_out("HTTP failed");
         return;
@@ -594,6 +596,7 @@ static void http_start(void)
     for (size_t i = 0; i < sizeof(URIS) / sizeof(URIS[0]); i++) {
         httpd_register_uri_handler(srv, &URIS[i]);
     }
+    ota_http_register(srv); /* GET /ota/status, POST /ota, /nostromo/version, POST /nostromo/ota */
     httpd_register_err_handler(srv, HTTPD_404_NOT_FOUND, h_404);
 }
 

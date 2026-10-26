@@ -42,17 +42,28 @@ static const rect_t BANNER = {56, 5, 128, 28};
 #define ROW_VOL 0
 #define ROW_WIFI 72
 #define ROW_KEYS 156
-#define ROW_ABOUT 236
-#define SET_H 290
+#define ROW_UPDATE 236
+#define ROW_ABOUT 312
+#define SET_H 366
 #define SL_X0 24
 #define SL_X1 216
 #define SL_Y (ROW_VOL + 48)
 /* only the bar itself (with a finger's margin) moves the volume */
 static const rect_t SLIDER_AREA = {SL_X0 - 12, SL_Y - 12, SL_X1 - SL_X0 + 24, 24};
 static const rect_t BTN_SETUP = {140, ROW_WIFI + 10, 84, 32};
+static const rect_t BTN_CHECK = {140, ROW_UPDATE + 10, 84, 32};
 
 /* wifi setup */
 static const rect_t BTN_DONE = {70, 192, 100, 34};
+
+/* update screen */
+static const rect_t BTN_UPD_BACK = {16, 186, 100, 38};
+static const rect_t BTN_UPD_GO = {124, 186, 100, 38};
+
+/* the "?" of a game with a help screen, top right below the score */
+static const rect_t BTN_RULES = {200, 38, 40, 40};
+#define RULES_CX 220
+#define RULES_CY 56
 
 static rect_t tile_rect(int i) { return (rect_t){TILE_X, TILE_Y0 + i * (TILE_H + TILE_GAP), TILE_W, TILE_H}; }
 
@@ -185,6 +196,97 @@ static void draw_game(const app_view_t *v)
     gfx_text_mid(b.x + b.w / 2, b.y + (b.h - 14) / 2, buf, 2, tc);
 
     GAMES[v->game_idx]->draw(s->st.bytes, -1);
+    if (GAMES[v->game_idx]->rules) {
+        gfx_ring(RULES_CX, RULES_CY, 12, 1.5f, COL_DIM);
+        gfx_text_mid(RULES_CX, RULES_CY - 7, "?", 2, COL_TEXT);
+    }
+}
+
+static void draw_rules(const app_view_t *v)
+{
+    const game_def_t *g = GAMES[v->game_idx];
+    title(g->title);
+    int y = 52;
+    for (const char *const *l = g->rules; l && *l; l++, y += 12) {
+        gfx_text(12, y, *l, 1, **l ? COL_TEXT : COL_DIM);
+    }
+    gfx_text_mid(SCREEN_W / 2, 222, "TAP OR LEFT = BACK", 1, COL_DIM);
+}
+
+static void draw_update(const app_view_t *v)
+{
+    const ota_view_t *o = &v->ota;
+    char buf[48];
+    title("UPDATES");
+    gfx_text(16, 50, "INSTALLED", 1, COL_DIM);
+    version_text(16, 62, FW_VERSION, 2, COL_TEXT);
+    gfx_text(16, 88, "LATEST ON GITHUB", 1, COL_DIM);
+    if (o->latest[0]) {
+        version_text(16, 100, o->latest, 2, o->check == UPD_NEWER ? COL_ACCENT : COL_TEXT);
+    } else {
+        gfx_text(16, 100, "--", 2, COL_DIM);
+    }
+
+    const char *msg = "";
+    uint16_t c = COL_DIM;
+    const char *go = NULL; /* the right-hand button */
+    switch (o->state) {
+    case OTA_CHECKING:
+        msg = "CHECKING...";
+        break;
+    case OTA_DOWNLOADING:
+    case OTA_REBOOTING: {
+        int pct = o->progress < 0 ? 0 : o->progress > 100 ? 100 : o->progress;
+        gfx_rrect(16, 140, 208, 16, 4, COL_LINE);
+        gfx_rect(18, 142, 204 * pct / 100, 12, COL_ACCENT);
+        if (o->state == OTA_REBOOTING) {
+            snprintf(buf, sizeof(buf), "RESTARTING...");
+        } else {
+            snprintf(buf, sizeof(buf), "DOWNLOADING %d%%", pct);
+        }
+        gfx_text_mid(SCREEN_W / 2, 164, buf, 1, COL_TEXT);
+        break;
+    }
+    case OTA_FAILED:
+        snprintf(buf, sizeof(buf), "UPDATE FAILED: %s", o->reason);
+        msg = buf;
+        c = COL_O;
+        go = o->from_github ? "RETRY" : "CHECK";
+        break;
+    case OTA_IDLE:
+        switch (o->check) {
+        case UPD_NEWER:
+            msg = o->has_asset ? "NEW VERSION! INSTALL IT?" : "NO FIRMWARE FILE IN RELEASE";
+            c = o->has_asset ? COL_ACCENT : COL_DIM;
+            go = o->has_asset ? "INSTALL" : "CHECK";
+            break;
+        case UPD_SAME:
+        case UPD_OLDER:
+            msg = "UP TO DATE";
+            c = COL_ACCENT;
+            go = "CHECK";
+            break;
+        case UPD_ERROR:
+            snprintf(buf, sizeof(buf), "CHECK FAILED: %s", o->check_err);
+            msg = buf;
+            c = COL_O;
+            go = "RETRY";
+            break;
+        case UPD_NONE:
+            go = "CHECK";
+            break;
+        }
+        break;
+    }
+    if (*msg) {
+        gfx_text_mid(SCREEN_W / 2, 146, msg, 1, c);
+    }
+    if (o->state != OTA_DOWNLOADING && o->state != OTA_REBOOTING) {
+        button(BTN_UPD_BACK, "BACK", COL_TEXT);
+    }
+    if (go) {
+        button(BTN_UPD_GO, go, COL_ACCENT);
+    }
 }
 
 static void draw_confirm(void)
@@ -245,6 +347,11 @@ static void draw_settings(const app_view_t *v)
     gfx_text(16, y0 + ROW_KEYS + 36, "LEFT: BACK", 1, COL_DIM);
     gfx_text(16, y0 + ROW_KEYS + 50, "HOLD LEFT + RIGHT: SETTINGS", 1, COL_DIM);
     gfx_text(16, y0 + ROW_KEYS + 64, "HOLD MIDDLE: POWER OFF", 1, COL_DIM);
+    gfx_rect(0, y0 + ROW_UPDATE - 1, SCREEN_W, 1, COL_LINE);
+
+    gfx_text(16, y0 + ROW_UPDATE + 19, "UPDATES", 2, COL_TEXT);
+    button(at(BTN_CHECK, SET_Y0, v->settings_scroll), "CHECK", COL_TEXT);
+    gfx_text(16, y0 + ROW_UPDATE + 52, "CHECK FOR UPDATES ON GITHUB", 1, COL_DIM);
     gfx_rect(0, y0 + ROW_ABOUT - 1, SCREEN_W, 1, COL_LINE);
 
     gfx_text(16, y0 + ROW_ABOUT + 12, "VERSION", 1, COL_DIM);
@@ -316,6 +423,12 @@ void ui_render(const app_view_t *v)
         gfx_text_mid(SCREEN_W / 2, 100, "POWERING OFF", 2, COL_TEXT);
         gfx_text_mid(SCREEN_W / 2, 130, "RELEASE THE BUTTON", 1, COL_DIM);
         break;
+    case SCR_RULES:
+        draw_rules(v);
+        break;
+    case SCR_UPDATE:
+        draw_update(v);
+        break;
     }
     display_flush();
 }
@@ -356,6 +469,9 @@ hit_t ui_hit(const app_view_t *v, int x, int y, int *arg)
         }
         return HIT_NONE;
     case SCR_GAME: {
+        if (GAMES[v->game_idx]->rules && in_rect(BTN_RULES, x, y)) {
+            return HIT_RULES;
+        }
         if (game_round(v->games[v->game_idx].st.bytes)->status != GAME_PLAYING) {
             return HIT_NEW_GAME;
         }
@@ -389,11 +505,28 @@ hit_t ui_hit(const app_view_t *v, int x, int y, int *arg)
         if (in_rect(at(BTN_SETUP, SET_Y0, v->settings_scroll), x, y)) {
             return HIT_WIFI_SETUP;
         }
+        if (in_rect(at(BTN_CHECK, SET_Y0, v->settings_scroll), x, y)) {
+            return HIT_UPDATE_CHECK;
+        }
         return HIT_NONE;
     case SCR_WIFI:
         return in_rect(BTN_DONE, x, y) ? HIT_WIFI_DONE : HIT_NONE;
     case SCR_OFF:
         return HIT_NONE;
+    case SCR_RULES:
+        return HIT_RULES_DONE;
+    case SCR_UPDATE: {
+        /* the same buttons draw_update() shows */
+        ota_state_t st = v->ota.state;
+        bool running = st == OTA_CHECKING || st == OTA_DOWNLOADING || st == OTA_REBOOTING;
+        if (st != OTA_DOWNLOADING && st != OTA_REBOOTING && in_rect(BTN_UPD_BACK, x, y)) {
+            return HIT_UPDATE_BACK;
+        }
+        if (!running && in_rect(BTN_UPD_GO, x, y)) {
+            return HIT_UPDATE_GO;
+        }
+        return HIT_NONE;
+    }
     }
     return HIT_NONE;
 }

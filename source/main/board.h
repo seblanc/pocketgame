@@ -25,6 +25,9 @@
 #define IMU_TILT_X_SIGN (-1)
 #define IMU_TILT_Y_SIGN 1
 #define IMU_SWAP_XY 0
+/* Tried on the board: left/right came out mirrored, so the games read the sensor's X
+ * axis inverted (all motion games: Tilt Duel, Hot Potato, Steady Hand). */
+#define IMU_INVERT_X 1
 
 /* ES8311 codec -> NS4150B speaker amplifier */
 #define I2S_MCLK 8

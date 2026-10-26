@@ -4,7 +4,8 @@
 
 /* Wi-Fi station with credentials kept in NVS, the phone setup hotspot
  * (PocketGame-XXXX, captive page at 192.168.4.1) and the HTTP server on port 80
- * (GET /status, GET / and, during setup, POST /save and GET /scan). */
+ * (GET /status, GET / and, during setup, POST /save and GET /scan; the updater's
+ * GET /ota/status and POST /ota, and NOSTROMO's /nostromo/version and /nostromo/ota). */
 
 typedef enum { WIFI_OFF, WIFI_CONNECTING, WIFI_CONNECTED, WIFI_FAILED, WIFI_SETUP } wifi_state_t;
 

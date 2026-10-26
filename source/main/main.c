@@ -3,7 +3,8 @@
  * Screens: home menu (one tile per game, top bar with battery % and Wi-Fi), the
  * games (tic-tac-toe, Connect 4 and the IMU games Tilt Duel, Hot Potato and Steady
  * Hand, modules in game/), a leave-game confirmation,
- * Settings (volume, where 0 is silent, and Wi-Fi) and the Wi-Fi setup hotspot screen.
+ * Settings (volume, where 0 is silent, Wi-Fi, updates), the Wi-Fi setup hotspot screen,
+ * the update screen (GitHub check, download progress) and a game's rules screen.
  *
  * Buttons: a short press on LEFT goes back (asking first while a game is running);
  * holding LEFT + RIGHT for 3 s opens Settings. The middle button is only the power
@@ -24,7 +25,16 @@
  *                              sets a game value (sim fuse <ms>). Replies with the game's
  *                              events and one state line (BALL | BUBBLE | POTATO ...);
  *                              from then on the round ignores the sensor and the clock
- *   imu                        IMU ax=.. ay=.. az=.. (mg) | ERR imu not found
+ *   imu                        IMU ax=.. ay=.. az=.. raw_ax=.. (mg; ax is the games' X axis,
+ *                              the raw one inverted) | ERR imu not found
+ *   rules                      the help screen of the game on screen (Hot Potato):
+ *                              SCREEN rules game=potato, RULES fuse=8-20s hold=2s ...
+ *   ota <http(s)://url>        flashes that image into the other app slot and restarts:
+ *                              OTA start .., OTA progress pct=n, OTA done | OTA FAIL reason=..
+ *   ota status                 OTA status state=.. running=ota_N next=ota_N fw=..
+ *   update check | install     the latest GitHub release of seblanc/pocketgame:
+ *                              UPDATE result=newer|same|older latest=.. current=.. | UPDATE ERR ..;
+ *                              install flashes its pocketgame.bin
  *   status                     STATUS screen=menu bat=.. mv=.. wifi=.. ip=.. starter=X vol=.. fw=v..
  *   open <id> | back | yes | no | settings      navigation, replies SCREEN ...
  *   vol <0-100>                                 VOL n (saved in NVS, 0 = silent)
@@ -62,6 +72,7 @@
 #include "i2cbus.h"
 #include "imu.h"
 #include "net.h"
+#include "ota.h"
 #include "scroll.h"
 #include "settings.h"
 #include "sound.h"
@@ -79,7 +90,7 @@ const game_def_t *const GAMES[] = {&TICTACTOE, &CONNECT4, &TILT_DUEL, &HOT_POTAT
 const int GAME_COUNT = sizeof(GAMES) / sizeof(GAMES[0]);
 _Static_assert(sizeof(GAMES) / sizeof(GAMES[0]) <= GAME_MAX, "raise GAME_MAX");
 
-static const char *const SCREEN_NAMES[] = {"menu", "game", "confirm", "settings", "wifi", "off"};
+static const char *const SCREEN_NAMES[] = {"menu", "game", "confirm", "settings", "wifi", "off", "rules", "update"};
 
 static SemaphoreHandle_t s_lock;
 static TaskHandle_t s_display_task;
@@ -116,6 +127,7 @@ static void request_redraw(void)
 }
 
 void app_net_changed(void) { request_redraw(); }
+void app_ota_changed(void) { request_redraw(); }
 
 static void lock(void) { xSemaphoreTake(s_lock, portMAX_DELAY); }
 static void unlock(void) { xSemaphoreGive(s_lock); }
@@ -128,6 +140,9 @@ static void show_locked(screen_t s)
     s_v.preview = -1;
     if (s == SCR_GAME) {
         out("SCREEN game=%s", GAMES[s_v.game_idx]->id);
+    } else if (s == SCR_RULES) {
+        out("SCREEN rules game=%s", GAMES[s_v.game_idx]->id);
+        out("RULES %s", GAMES[s_v.game_idx]->rules_uart);
     } else {
         out("SCREEN %s", SCREEN_NAMES[s]);
     }
@@ -190,7 +205,8 @@ static void app_open_game(int idx, const char *src)
 static void app_new_game(const char *src)
 {
     lock();
-    ensure_game_locked(s_v.screen == SCR_GAME || s_v.screen == SCR_CONFIRM ? s_v.game_idx : 0);
+    bool on_game = s_v.screen == SCR_GAME || s_v.screen == SCR_CONFIRM || s_v.screen == SCR_RULES;
+    ensure_game_locked(on_game ? s_v.game_idx : 0);
     new_round_locked();
     out("NEW src=%s", src);
     print_ready_locked();
@@ -278,6 +294,12 @@ static void app_back(const char *src)
         stop_setup = net_state() == WIFI_SETUP;
         show_locked(SCR_SETTINGS);
         break;
+    case SCR_RULES:
+        show_locked(SCR_GAME);
+        break;
+    case SCR_UPDATE:
+        show_locked(SCR_SETTINGS); /* a download goes on in the background */
+        break;
     case SCR_MENU:
         show_locked(SCR_MENU);
         break;
@@ -308,7 +330,7 @@ static void app_settings(const char *src)
 {
     lock();
     out("SETTINGS src=%s", src);
-    if (s_v.screen != SCR_SETTINGS && s_v.screen != SCR_WIFI) {
+    if (s_v.screen != SCR_SETTINGS && s_v.screen != SCR_WIFI && s_v.screen != SCR_UPDATE) {
         s_settings_from = s_v.screen;
     }
     show_locked(SCR_SETTINGS);
@@ -334,10 +356,54 @@ static void app_set_volume(int vol, bool save, bool tick)
     request_redraw();
 }
 
+/* the help screen of the game on screen (Hot Potato) */
+static void app_rules(const char *src)
+{
+    lock();
+    const game_def_t *g = GAMES[s_v.game_idx];
+    if ((s_v.screen != SCR_GAME && s_v.screen != SCR_RULES) || !g->rules) {
+        unlock();
+        out("ERR no rules here (open potato first)");
+        return;
+    }
+    out("RULES src=%s", src);
+    show_locked(SCR_RULES); /* the round waits: motion only runs on the game screen */
+    unlock();
+    sound_play(SND_TICK);
+}
+
+/* Settings > CHECK: the update screen, and the GitHub check */
+static void app_update_check(const char *src)
+{
+    lock();
+    if (s_v.screen != SCR_SETTINGS && s_v.screen != SCR_WIFI && s_v.screen != SCR_UPDATE) {
+        s_settings_from = s_v.screen;
+    }
+    if (s_v.screen != SCR_UPDATE) {
+        show_locked(SCR_UPDATE);
+    }
+    unlock();
+    sound_play(SND_TICK);
+    ota_check(src);
+}
+
+/* the update screen's right-hand button: install a newer release, else check again */
+static void app_update_go(const char *src)
+{
+    ota_view_t o;
+    ota_get_view(&o);
+    if (o.state == OTA_IDLE && o.check == UPD_NEWER && o.has_asset) {
+        sound_play(SND_TICK);
+        ota_install_latest(src);
+    } else {
+        app_update_check(src);
+    }
+}
+
 static void app_wifi_setup(void)
 {
     lock();
-    if (s_v.screen != SCR_SETTINGS && s_v.screen != SCR_WIFI) {
+    if (s_v.screen != SCR_SETTINGS && s_v.screen != SCR_WIFI && s_v.screen != SCR_UPDATE) {
         s_settings_from = s_v.screen;
     }
     show_locked(SCR_WIFI);
@@ -354,6 +420,7 @@ static void snapshot(app_view_t *v)
     unlock();
     v->wifi = net_state();
     net_ip(v->ip, sizeof(v->ip));
+    ota_get_view(&v->ota);
 }
 
 static void print_status(void)
@@ -512,14 +579,42 @@ static void handle_sim(const char *arg)
 
 static void handle_imu(void)
 {
-    int ax, ay, az;
-    if (!imu_read_mg(&ax, &ay, &az)) {
+    int raw_ax, ay, az;
+    if (!imu_read_raw_mg(&raw_ax, &ay, &az)) {
         out("ERR imu not found");
         return;
     }
+    /* the games' X axis is the raw one inverted (IMU_INVERT_X); one reading for both */
+    int ax = IMU_INVERT_X ? -raw_ax : raw_ax;
     int tx, ty;
     imu_screen_tilt(ax, ay, &tx, &ty);
-    out("IMU ax=%d ay=%d az=%d tilt=%d,%d", ax, ay, az, tx, ty);
+    out("IMU ax=%d ay=%d az=%d raw_ax=%d tilt=%d,%d", ax, ay, az, raw_ax, tx, ty);
+}
+
+/* ota <url> | ota status */
+static void handle_ota(const char *arg)
+{
+    if (*arg == '\0') {
+        out("ERR usage (ota <http(s)://host/fw.bin> | ota status)");
+    } else if (strcmp(arg, "status") == 0) {
+        ota_print_status();
+    } else {
+        ota_start_url(arg, "uart");
+    }
+}
+
+/* update [check | install] */
+static void handle_update(const char *arg)
+{
+    if (strcmp(arg, "check") == 0) {
+        ota_check("uart");
+    } else if (strcmp(arg, "install") == 0) {
+        ota_install_latest("uart");
+    } else if (*arg == '\0') {
+        ota_print_status();
+    } else {
+        out("ERR update (check | install)");
+    }
 }
 
 static void handle_line(char *line)
@@ -584,6 +679,12 @@ static void handle_line(char *line)
         handle_sim(arg);
     } else if (strcmp(line, "imu") == 0) {
         handle_imu();
+    } else if (strcmp(line, "rules") == 0) {
+        app_rules("uart");
+    } else if (strcmp(line, "ota") == 0) {
+        handle_ota(arg);
+    } else if (strcmp(line, "update") == 0) {
+        handle_update(arg);
     } else {
         for (int i = 0; i < GAME_COUNT; i++) {
             if (strcmp(line, GAMES[i]->verb) == 0) {
@@ -591,8 +692,9 @@ static void handle_line(char *line)
                 return;
             }
         }
-        out("ERR unknown command (new | play <0-8> | drop <0-6> ... | maze | pass | hold | sim ... | imu | board | "
-            "status | open ttt|c4|tilt|potato|steady | back | yes | no | settings | vol <0-100> | wifi ...)");
+        out("ERR unknown command (new | play <0-8> | drop <0-6> ... | maze | pass | hold | sim ... | imu | rules | "
+            "board | status | open ttt|c4|tilt|potato|steady | back | yes | no | settings | vol <0-100> | wifi ... | "
+            "ota <url>|status | update check|install)");
     }
 }
 
@@ -600,7 +702,7 @@ static void handle_line(char *line)
  * output, so the game never stalls when no computer is listening. */
 static void console_task(void *arg)
 {
-    char line[128];
+    char line[300]; /* room for an "ota <url>" */
     size_t len = 0;
     char prev = 0;
     for (;;) {
@@ -672,8 +774,19 @@ static hit_t on_press(int x, int y, int *arg)
     switch (h) {
     case HIT_TILE:
     case HIT_WIFI_SETUP:
+    case HIT_UPDATE_CHECK:
     case HIT_SLIDER:
         return h;
+    case HIT_RULES:
+        app_rules("touch");
+        break;
+    case HIT_RULES_DONE:
+    case HIT_UPDATE_BACK:
+        app_back("touch");
+        break;
+    case HIT_UPDATE_GO:
+        app_update_go("touch");
+        break;
     case HIT_AIM:
         set_preview(*arg);
         return h;
@@ -776,7 +889,7 @@ static void touch_task(void *arg)
             hit_t h = on_press(x, y, &pending_arg);
             slider = h == HIT_SLIDER;
             aim = h == HIT_AIM;
-            pending = (h == HIT_TILE || h == HIT_WIFI_SETUP) && !gliding ? h : HIT_NONE;
+            pending = (h == HIT_TILE || h == HIT_WIFI_SETUP || h == HIT_UPDATE_CHECK) && !gliding ? h : HIT_NONE;
             if (slider) {
                 slider_x = x;
                 lock();
@@ -836,6 +949,8 @@ static void touch_task(void *arg)
                     app_open_game(pending_arg, "touch");
                 } else if (pending == HIT_WIFI_SETUP && !moved) {
                     app_wifi_setup();
+                } else if (pending == HIT_UPDATE_CHECK && !moved) {
+                    app_update_check("touch");
                 }
             }
             pending = HIT_NONE;
@@ -1089,6 +1204,9 @@ void app_main(void)
     s_v.bat_pct = battery_pct(s_v.bat_mv);
     out("BAT mv=%d pct=%d adc=io%d", s_v.bat_mv, s_v.bat_pct, BAT_ADC);
 
+    /* the hardware came up: keep this build (cancels the rollback of a fresh OTA image) */
+    ota_boot();
+
     if (!net_init()) {
         out("WIFI init failed");
     }
@@ -1108,7 +1226,5 @@ void app_main(void)
     lock();
     print_ready_locked();
     unlock();
-    xTaskCreate(console_task, "console", 4096, NULL, 6, NULL);
-    /* this build booted: keep it (matters once it arrives over the air) */
-    esp_ota_mark_app_valid_cancel_rollback();
+    xTaskCreate(console_task, "console", 6144, NULL, 6, NULL);
 }

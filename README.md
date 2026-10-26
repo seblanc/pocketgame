@@ -15,12 +15,15 @@ Minimal UI: dark background, thin lines, one accent colour.
   (`AIM cancelled`) or on a full column (`ERR full column n`) leaves the turn unchanged.
   Four in a row (horizontal, vertical, diagonal) wins and is highlighted; a full board is a draw.
   Blue X / red O discs and banner, same sounds and rules for starting and leaving as tic-tac-toe.
-- **Motion games** use the QMI8658 IMU (I2C 0x6b on the shared bus; axis signs in `board.h`):
+- **Motion games** use the QMI8658 IMU (I2C 0x6b on the shared bus; axis signs in `board.h`, the
+  left/right axis is inverted for all motion games with `IMU_INVERT_X`):
   - **Tilt Duel:** each player taps to start, then tilts the board to roll a ball through an 8x8 maze
-    to the target; the faster run wins, 60 s is a timeout.
+    with several turns and dead ends to the target; the faster run wins, 60 s is a timeout.
   - **Hot Potato:** a hidden 8-20 s fuse burns; tap to pass after holding 2 s, or shake once per round
-    to skip at once. Whoever holds it at the boom loses.
-  - **Steady Hand:** keep the tilt-driven bubble inside a shrinking circle; the longer survival wins.
+    to skip at once. Whoever holds it at the boom loses. The "?" opens a rules screen.
+  - **Steady Hand:** keep the tilt-driven bubble inside the target circle. It shrinks, every 4 s jumps
+    to a new random place (a bit smaller each time; 1.2 s to reach it) and shrinks again, until the
+    bubble leaves it; the longer survival wins.
 - **Tic-tac-toe:** tap a cell to place X or O; after a win or a draw, tap anywhere for a new game.
   X is blue, O is red: a banner in the player's colour shows who starts ("X STARTS") and whose turn it
   is. The starting player alternates after every finished round (an abandoned round keeps its starter).
@@ -35,14 +38,22 @@ Minimal UI: dark background, thin lines, one accent colour.
   holding it 3 s shows "Powering off" and releases the battery latch (on USB power the board sleeps
   instead, and the next press wakes it).
 - **Settings:** a scrolling list of rows: volume slider (saved in NVS; 0 shows OFF and is silent, there
-  is no separate mute), Wi-Fi, a button reference and the firmware version. Wi-Fi setup:
+  is no separate mute), Wi-Fi, a button reference, Updates (CHECK) and the firmware version. Wi-Fi setup:
   the board scans for networks, opens the hotspot `PocketGame-XXXX`; join it from a phone, the setup page
   opens (or visit `192.168.4.1`) and lists nearby networks (signal bars, dBm, lock for secured ones).
   Tap one to fill in its name, or type a name by hand; "Scan again" rescans. Enter the password and tap
   the filled, rounded CONNECT button; the board joins the network.
 - **HTTP (port 80, on the joined network):** `GET /status` returns JSON (`{"app":"pocketgame",...}`).
-- The partition table has two OTA app slots and rollback is enabled, ready for over-the-air updates
-  (for example from GitHub releases).
+- **OTA updates:** two app slots (`ota_0`, `ota_1`) with bootloader rollback: a new image that does not
+  get through the hardware start is rolled back at the next reset (`OTA boot slot=.. state=valid`).
+  - Settings > Updates > CHECK reads the latest release of the public GitHub repo `seblanc/pocketgame`
+    over HTTPS, compares its tag (`vMAJOR.MINOR-YYYY-MM`) with the running version and offers INSTALL
+    when it is newer; the release must carry `pocketgame.bin` (the app image of the build). A progress
+    bar runs during the download, then the board restarts on the new slot.
+  - Engineering push without USB: `ota <http(s)://url>` on the console, or `POST /ota {"url":"..."}`
+    on port 80; `GET /ota/status` reports `{"state":"idle|checking|downloading|rebooting|failed",...}`.
+    Only PocketGame images for the ESP32-S3 are accepted.
+  - NOSTROMO's flashing contract (`GET /nostromo/version`, `POST /nostromo/ota`) is served too.
 
 Pins come from the vendor schematic (`docs/ESP32-S3-LCD-1.54-Schematic.pdf`), see `source/main/board.h`.
 LEFT = GPIO0 (BOOT), RIGHT = GPIO4, power key GPIO5 (active low), battery latch BAT_EN = GPIO2.
@@ -57,8 +68,11 @@ Serial commands (USB-C console, 115200):
 | `status` | `STATUS screen=menu game=ttt bat=87 mv=4012 wifi=connected ip=... starter=X vol=70` |
 | `open ttt\|c4\|tilt\|potato\|steady`, `back`, `yes`, `no`, `settings` | `SCREEN menu\|game=<id>\|confirm\|settings\|wifi`, `MENU games=5` |
 | `maze [go]`, `pass`, `hold [go]` | Tilt Duel / Hot Potato / Steady Hand: state or a tap (`GO X`, `PASS X`, `ERR too soon`) |
-| `sim tilt <ax> <ay> <ms>`, `sim shake`, `sim wait <ms>`, `sim fuse <ms>` | motion game on screen, simulated input and clock: `BALL cell=c,r`, `FINISH X ms=n`, `TIMEOUT O`, `SKIP X`, `BOOM X`, `BUBBLE d= r=`, `OUT X ms=n`, `WIN X`; `ERR` elsewhere |
-| `imu` | `IMU ax=.. ay=.. az=..` (mg) |
+| `sim tilt <ax> <ay> <ms>`, `sim shake`, `sim wait <ms>`, `sim fuse <ms>` | motion game on screen, simulated input and clock: `BALL cell=c,r`, `FINISH X ms=n`, `TIMEOUT O`, `SKIP X`, `BOOM X`, `CIRCLE move x= y= r=`, `BUBBLE d= r=`, `OUT X ms=n`, `WIN X`; `ERR` elsewhere |
+| `imu` | `IMU ax=.. ay=.. az=.. raw_ax=..` (mg; `ax` is the games' X axis, the inverted `raw_ax`) |
+| `rules` | on Hot Potato: `SCREEN rules game=potato`, `RULES fuse=8-20s hold=2s skip=1 boom=loses` |
+| `ota <url>`, `ota status` | `OTA start url=..`, `OTA progress pct=n`, `OTA done slot=..` or `OTA FAIL reason=..`; `OTA status state=.. running=ota_0 next=ota_1 fw=..` |
+| `update check`, `update install` | `UPDATE check repo=seblanc/pocketgame`, then `UPDATE result=newer\|same\|older latest=.. current=..` or `UPDATE ERR ..` |
 | `vol <0-100>` | `VOL n` (0 = silent) |
 | `wifi scan` | `WIFI scan n=<count>`, then `WIFI ap <i> rssi=.. ch=.. secure=0\|1` per network (names stay off the console) |
 | `wifi ssid` / `wifi pass` | `SSID?` / `PASS?`, then the next line is the value; `WIFI saved`, `WIFI connected ip=...` |

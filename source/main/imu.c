@@ -42,7 +42,7 @@ bool imu_ok(void) { return s_ok; }
 
 uint8_t imu_rev(void) { return s_rev; }
 
-bool imu_read_mg(int *ax, int *ay, int *az)
+bool imu_read_raw_mg(int *ax, int *ay, int *az)
 {
     uint8_t b[6];
     if (!s_ok || !i2cbus_read_reg(IMU_ADDR, REG_AX_L, b, sizeof(b))) {
@@ -55,6 +55,17 @@ bool imu_read_mg(int *ax, int *ay, int *az)
     *ax = v[0];
     *ay = v[1];
     *az = v[2];
+    return true;
+}
+
+bool imu_read_mg(int *ax, int *ay, int *az)
+{
+    if (!imu_read_raw_mg(ax, ay, az)) {
+        return false;
+    }
+#if IMU_INVERT_X
+    *ax = -*ax;
+#endif
     return true;
 }
 

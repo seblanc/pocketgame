@@ -223,6 +223,23 @@ static void potato_icon(int x, int y, int s)
     draw_potato(x + s / 2.0f, y + s / 2.0f, s * 0.38f);
 }
 
+static const char *const RULES[] = {
+    "A HIDDEN FUSE BURNS FOR 8 TO 20 S.",
+    "NOBODY KNOWS WHEN IT GOES BOOM.",
+    "",
+    "HOLD THE BOARD AT LEAST 2 S,",
+    "THEN TAP PASS TO HAND IT ON.",
+    "",
+    "IN A HURRY? SHAKE IT TO SKIP:",
+    "ONE SKIP PER PLAYER PER ROUND.",
+    "",
+    "WHOEVER HOLDS THE BOARD AT",
+    "BOOM LOSES THE ROUND.",
+    NULL,
+};
+_Static_assert(POTATO_FUSE_MIN_MS == 8000 && POTATO_FUSE_MAX_MS == 20000 && POTATO_HOLD_MS == 2000,
+               "update the rules text");
+
 const game_def_t HOT_POTATO = {
     .id = "potato",
     .title = "HOT POTATO",
@@ -237,5 +254,7 @@ const game_def_t HOT_POTATO = {
     .step = potato_step,
     .report = potato_report,
     .sim_set = potato_sim_set,
+    .rules = RULES,
+    .rules_uart = "fuse=8-20s hold=2s skip=1 boom=loses",
 };
 #endif

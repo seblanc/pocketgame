@@ -12,6 +12,11 @@ typedef enum {
     HIT_SLIDER,     /* on the volume bar itself; arg = volume 0..100 */
     HIT_WIFI_SETUP, /* acts on release, like HIT_TILE */
     HIT_WIFI_DONE,
+    HIT_UPDATE_CHECK, /* settings list: acts on release, like HIT_TILE */
+    HIT_UPDATE_BACK,
+    HIT_UPDATE_GO,    /* update screen: install the newer release, or check again */
+    HIT_RULES,        /* the "?" of a game with a help screen */
+    HIT_RULES_DONE,
 } hit_t;
 
 /* Draws the whole screen of v and sends it to the panel. */

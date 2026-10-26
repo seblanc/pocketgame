@@ -29,10 +29,20 @@ int main(void)
     assert(tilt_for(&t, -1000, 0, 1000) == TILT_EV_NONE);
     tilt_cell(&t, &c, &r);
     assert(c == 0 && r == 0);
-    assert(tilt_for(&t, 1000, 0, 3000) == TILT_EV_NONE);
-    tilt_cell(&t, &c, &r);
-    assert(c == 7 && r == 0);
-    assert(tilt_for(&t, 0, 1000, 3000) == TILT_EV_FINISH);
+    /* the way through the maze, leg by leg, as in the UART acceptance test */
+    static const struct {
+        int tx, ty, c, r;
+    } LEGS[] = {
+        {1000, 0, 3, 0}, {0, 1000, 3, 2}, {1000, 0, 5, 2}, {-1000, 0, 1, 2},
+        {0, 1000, 1, 5}, {1000, 0, 5, 5}, {0, 1000, 5, 7},
+    };
+    for (size_t i = 0; i < sizeof(LEGS) / sizeof(LEGS[0]); i++) {
+        assert(tilt_for(&t, LEGS[i].tx, LEGS[i].ty, 3000) == TILT_EV_NONE);
+        tilt_cell(&t, &c, &r);
+        printf("leg %zu: ball at %d,%d\n", i, c, r);
+        assert(c == LEGS[i].c && r == LEGS[i].r);
+    }
+    assert(tilt_for(&t, 1000, 0, 3000) == TILT_EV_FINISH);
     assert(t.time[CELL_X] > 4000 && t.r.turn == CELL_O);
     assert(tilt_for(&t, 0, 0, 61000) == TILT_EV_TIMEOUT);
     assert(t.r.status == GAME_WIN && t.r.winner == CELL_X);
@@ -53,11 +63,12 @@ int main(void)
     steady_t s;
     steady_start(&s, CELL_X);
     steady_go(&s);
-    assert(!steady_step(&s, 0, 0, 5000));
-    assert(steady_step(&s, 1000, 0, 500));
+    assert(steady_step(&s, 0, 0, 5000) == STEADY_EV_NONE);
+    assert(s.jumps == 1); /* the circle jumped once */
+    assert(steady_step(&s, 1000, 0, 500) == STEADY_EV_OUT);
     assert(s.time[CELL_X] >= 5000 && s.r.turn == CELL_O);
     steady_go(&s);
-    assert(steady_step(&s, 1000, 0, 500));
+    assert(steady_step(&s, 1000, 0, 500) == STEADY_EV_OUT);
     assert(s.time[CELL_O] < 1000);
     assert(s.r.status == GAME_WIN && s.r.winner == CELL_X);
     printf("motion rules ok\n");

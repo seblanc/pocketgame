@@ -3,13 +3,20 @@
 #include <string.h>
 
 /* The maze: V_WALLS[r][c] is the wall right of cell (c, r), H_WALLS[r][c] the wall
- * below it; the outer frame is always closed. The top row and the right column are
- * open corridors (the UART acceptance test rolls the ball along them). */
+ * below it; the outer frame is always closed. A tree maze (one way between any two
+ * cells) with long dead ends. The way out, as cells (col,row), has a straight
+ * corridor ending at a wall for every leg, so a held tilt stops the ball at each turn
+ * (the UART acceptance test rolls it along this way):
+ *   right to 3,0 - down to 3,2 - [right into the dead end 5,2 - back left] - left to
+ *   1,2 - down to 1,5 - right to 5,5 - down to 5,7 - right to the target 7,7.
+ * The dead ends: 2,1 off the start, the long arm round the right side from 3,1
+ * (ends 5,1, 6,2 and 6,5), the middle block from 2,2 (ends 6,3, 2,4 and 6,4) and the
+ * bottom-left arm from 0,1 (ends 4,6 and 4,7, a wall short of the way out). */
 static const char *const V_WALLS[TILT_ROWS] = {
-    ".......", ".|.|..|", "..|.|.|", "|...|.|", "..|...|", ".|.|..|", "|..|..|", ".|..|..",
+    "...|...", "..|.|..", "|....|.", "||....|", "||..|.|", "|....||", "....||.", "....|..",
 };
 static const char *const H_WALLS[TILT_ROWS - 1] = {
-    ".-.--.-.", "-..-.-..", ".-.-..-.", ".-.--.-.", "-.-.-.-.", ".-.-.--.", "-.-..-..",
+    ".--..--.", ".--.---.", "...----.", "..--..-.", "..-----.", ".----...", ".----.--",
 };
 
 #define TARGET_COL (TILT_COLS - 1)

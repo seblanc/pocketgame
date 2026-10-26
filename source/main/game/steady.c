@@ -8,7 +8,10 @@
 static void place_bubble(steady_t *g)
 {
     g->x = g->y = 0;
-    g->ms = 0;
+    g->cx = g->cy = 0;
+    g->r0 = STEADY_R0;
+    g->ms = g->seg_ms = 0;
+    g->reached = true;
     g->run = STEADY_WAIT;
 }
 
@@ -30,9 +33,45 @@ bool steady_go(steady_t *g)
     return true;
 }
 
-float steady_radius(uint32_t ms)
+float steady_radius(const steady_t *g)
 {
-    return STEADY_RMIN + (STEADY_R0 - STEADY_RMIN) * expf(-(float)ms / STEADY_SHRINK_MS);
+    uint32_t t = g->seg_ms < STEADY_MOVE_MS ? g->seg_ms : STEADY_MOVE_MS;
+    return g->r0 * (1 - (1 - STEADY_SHRINK) * t / (float)STEADY_MOVE_MS);
+}
+
+float steady_dist(const steady_t *g) { return hypotf(g->x - g->cx, g->y - g->cy); }
+
+/* -span..span, 0 when there is no room */
+static float random_offset(float span)
+{
+    int s = (int)span;
+    return s > 0 ? (float)((int)(game_random() % (uint32_t)(2 * s + 1)) - s) : 0;
+}
+
+/* the circle jumps somewhere else on the screen, a little smaller than last time; of a
+ * few random places it takes the first that is a real jump away (else the farthest) */
+static void jump(steady_t *g)
+{
+    g->r0 = fmaxf(STEADY_R_START_MIN, g->r0 - STEADY_R_STEP);
+    g->seg_ms = 0;
+    float sx = STEADY_AREA_HALF_W - g->r0, sy = STEADY_AREA_HALF_H - g->r0;
+    float best_x = g->cx, best_y = g->cy, best_d = -1;
+    for (int i = 0; i < 4; i++) {
+        float nx = random_offset(sx), ny = random_offset(sy);
+        float d = hypotf(nx - g->cx, ny - g->cy);
+        if (d > best_d) {
+            best_x = nx;
+            best_y = ny;
+            best_d = d;
+        }
+        if (d >= g->r0 * 0.75f) {
+            break;
+        }
+    }
+    g->cx = best_x;
+    g->cy = best_y;
+    g->reached = steady_dist(g) <= steady_radius(g);
+    g->jumps++;
 }
 
 static void end_run(steady_t *g)
@@ -54,10 +93,10 @@ static void end_run(steady_t *g)
 
 static int clampi(int v, int lo, int hi) { return v < lo ? lo : v > hi ? hi : v; }
 
-bool steady_step(steady_t *g, int tx, int ty, uint32_t dt_ms)
+steady_ev_t steady_step(steady_t *g, int tx, int ty, uint32_t dt_ms)
 {
     if (g->r.status != GAME_PLAYING || g->run != STEADY_GO) {
-        return false;
+        return STEADY_EV_NONE;
     }
     float px = clampi(tx, -TILT_MAX, TILT_MAX) * (STEADY_PX_PER_G / 1000.0f);
     float py = clampi(ty, -TILT_MAX, TILT_MAX) * (STEADY_PX_PER_G / 1000.0f);
@@ -68,15 +107,28 @@ bool steady_step(steady_t *g, int tx, int ty, uint32_t dt_ms)
         }
         dt_ms -= s;
         g->ms += s;
+        g->seg_ms += s;
         float k = 1 - expf(-(float)s / STEADY_TAU_MS);
         g->x += (px - g->x) * k;
         g->y += (py - g->y) * k;
-        if (hypotf(g->x, g->y) > steady_radius(g->ms) || g->ms >= STEADY_LIMIT_MS) {
+        if (g->seg_ms >= STEADY_MOVE_MS) {
+            jump(g);
+        }
+        bool inside = steady_dist(g) <= steady_radius(g);
+        bool out;
+        if (g->reached) {
+            out = !inside;
+        } else {
+            /* just jumped: the bubble is on its way to the new circle */
+            g->reached = inside;
+            out = !inside && g->seg_ms >= STEADY_GRACE_MS;
+        }
+        if (out || g->ms >= STEADY_LIMIT_MS) {
             end_run(g);
-            return true;
+            return STEADY_EV_OUT;
         }
     }
-    return false;
+    return STEADY_EV_NONE;
 }
 
 #ifndef GAME_RULES_ONLY
@@ -119,15 +171,17 @@ static void steady_new_round(void *st, uint8_t first) { steady_start(st, first);
 
 static void steady_print(const void *st)
 {
-    app_out("STEADY r0=%d limit=%ds", (int)STEADY_R0, STEADY_LIMIT_MS / 1000);
+    app_out("STEADY r0=%d move=%dms grace=%dms limit=%ds", (int)STEADY_R0, STEADY_MOVE_MS, STEADY_GRACE_MS,
+            STEADY_LIMIT_MS / 1000);
     print_result(st);
 }
 
 static void steady_report(const void *st)
 {
     const steady_t *g = st;
-    app_out("BUBBLE d=%d r=%d ms=%lu run=%s", (int)hypotf(g->x, g->y), (int)steady_radius(g->ms),
-            (unsigned long)g->ms, g->r.status != GAME_PLAYING ? "over" : g->run == STEADY_GO ? "go" : "wait");
+    app_out("BUBBLE d=%d r=%d ms=%lu circle=%d,%d run=%s", (int)steady_dist(g), (int)steady_radius(g),
+            (unsigned long)g->ms, CX + (int)g->cx, CY + (int)g->cy,
+            g->r.status != GAME_PLAYING ? "over" : g->run == STEADY_GO ? "go" : "wait");
 }
 
 static game_event_t start_run(steady_t *g, const char *src)
@@ -170,8 +224,12 @@ static game_event_t steady_step_ev(void *st, const motion_t *m)
     if (m->sim && g->r.status == GAME_PLAYING && g->run == STEADY_WAIT) {
         start_run(g, "sim");
     }
-    uint8_t p = g->r.turn;
-    if (!steady_step(g, m->tx, m->ty, m->dt_ms)) {
+    uint8_t p = g->r.turn, jumps = g->jumps;
+    steady_ev_t ev = steady_step(g, m->tx, m->ty, m->dt_ms);
+    if (g->jumps != jumps && ev == STEADY_EV_NONE) {
+        app_out("CIRCLE move x=%d y=%d r=%d", CX + (int)g->cx, CY + (int)g->cy, (int)steady_radius(g));
+    }
+    if (ev == STEADY_EV_NONE) {
         return GEV_NONE;
     }
     app_out("OUT %c ms=%ld", game_mark_char(p), (long)g->time[p]);
@@ -206,12 +264,15 @@ static void steady_draw(const void *st, int preview)
     (void)preview;
     const steady_t *g = st;
     uint16_t pc = g->r.turn == CELL_X ? COL_X : COL_O;
-    gfx_ring(CX, CY, STEADY_R0 + 4, 1, COL_LINE);
     if (g->r.status == GAME_PLAYING) {
-        gfx_ring(CX, CY, steady_radius(g->ms), 2, COL_ACCENT);
-        gfx_line(CX - 4, CY, CX + 4, CY, 1, COL_DIM);
-        gfx_line(CX, CY - 4, CX, CY + 4, 1, COL_DIM);
+        float cx = CX + g->cx, cy = CY + g->cy;
+        /* white while the bubble still has to reach a circle that just jumped */
+        gfx_ring(cx, cy, steady_radius(g), 2, g->reached ? COL_ACCENT : COL_TEXT);
+        gfx_line(cx - 4, cy, cx + 4, cy, 1, COL_DIM);
+        gfx_line(cx, cy - 4, cx, cy + 4, 1, COL_DIM);
         gfx_disc(CX + g->x, CY + g->y, BUBBLE_R, pc);
+    } else {
+        gfx_ring(CX, CY, STEADY_R0, 1, COL_LINE);
     }
     char b[16], line[24];
     secs(b, sizeof(b), g->time[CELL_X]);

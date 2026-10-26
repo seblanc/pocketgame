@@ -3,8 +3,9 @@
 #include <stddef.h>
 #include "game/game.h"
 #include "net.h"
+#include "ota.h"
 
-typedef enum { SCR_MENU, SCR_GAME, SCR_CONFIRM, SCR_SETTINGS, SCR_WIFI, SCR_OFF } screen_t;
+typedef enum { SCR_MENU, SCR_GAME, SCR_CONFIRM, SCR_SETTINGS, SCR_WIFI, SCR_OFF, SCR_RULES, SCR_UPDATE } screen_t;
 
 /* One entry per game on the home screen, in menu order (main.c). A new game is a
  * module in game/ exporting a game_def_t, added to this list. */
@@ -36,6 +37,7 @@ typedef struct {
     char ip[16];
     char ap_name[24];
     char version[33]; /* build id (commit) from the app description */
+    ota_view_t ota;   /* the updater (update screen) */
 } app_view_t;
 
 /* human-readable firmware version, defined once in source/CMakeLists.txt */
@@ -47,5 +49,7 @@ typedef struct {
 void app_out(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 /* Wi-Fi state changed: redraw */
 void app_net_changed(void);
+/* update check / download progressed: redraw */
+void app_ota_changed(void);
 /* the GET /status JSON */
 void app_status_json(char *buf, size_t n);

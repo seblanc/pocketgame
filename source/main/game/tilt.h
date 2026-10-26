@@ -2,7 +2,8 @@
 #include "game.h"
 
 /* Tilt Duel: each player in turn tilts the board to roll a ball through an 8 x 8 maze
- * from the top-left cell to the target in the bottom-right one; the faster run wins, a
+ * (several turns, dead ends) from the top-left cell to the target in the bottom-right
+ * one; the faster run wins, a
  * run that takes 60 s times out (two timeouts or equal times are a draw). A run starts
  * on a tap (or on the first simulated tilt). The rules are pure C, also built on the
  * host by tests/ (-DGAME_RULES_ONLY).

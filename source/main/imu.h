@@ -11,6 +11,9 @@ bool imu_ok(void);
 /* chip revision byte, valid after imu_init() */
 uint8_t imu_rev(void);
 /* raw accelerometer in mg, sensor axes */
+bool imu_read_raw_mg(int *ax, int *ay, int *az);
+/* the accelerometer in mg as the games use it: the raw reading with the X axis
+ * inverted when IMU_INVERT_X is set (board.h) */
 bool imu_read_mg(int *ax, int *ay, int *az);
 /* the same reading as the tilt of the screen, in mg: tx > 0 when the right edge is
  * lower, ty > 0 when the bottom edge is lower (where a ball on the screen rolls) */
