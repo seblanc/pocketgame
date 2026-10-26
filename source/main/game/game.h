@@ -32,7 +32,22 @@ typedef enum {
     GEV_BAD,    /* rejected: the ERR line is printed, the turn does not change */
     GEV_WIN,
     GEV_DRAW,
+    GEV_BOOM,   /* a win for r.winner announced with the boom (Hot Potato) */
 } game_event_t;
+
+/* The motion games (Tilt Duel, Hot Potato, Steady Hand) are driven by time steps: the
+ * app feeds the IMU every ~20 ms while such a game is on screen, or the UART "sim"
+ * command feeds made-up tilt and shakes on a simulated clock (then the live sensor and
+ * the real clock are ignored until the next round). */
+typedef struct {
+    int tx, ty;     /* screen tilt in mg: tx > 0 right edge lower, ty > 0 bottom edge lower */
+    bool shake;     /* a firm shake in this step */
+    uint32_t dt_ms; /* time this step covers */
+    bool sim;       /* injected over UART: a run waiting for its tap starts by itself */
+} motion_t;
+
+/* a random number for the games (hidden timers); the app provides it */
+uint32_t game_random(void);
 
 /* room for one game's state in the app's view (each module checks its size) */
 #define GAME_STATE_MAX 96
@@ -59,6 +74,13 @@ typedef struct {
     void (*draw)(const void *st, int preview);
     /* menu tile icon, s x s px at x,y */
     void (*icon)(int x, int y, int s);
+    /* motion games only (NULL for the others) */
+    /* advances the round by m->dt_ms; prints what happened, GEV_NONE for most steps */
+    game_event_t (*step)(void *st, const motion_t *m);
+    /* one line of live state after a sim command: BALL ... | BUBBLE ... | POTATO ... */
+    void (*report)(const void *st);
+    /* "sim <key> <value>" of this game (Hot Potato: fuse); false for an unknown key */
+    bool (*sim_set)(void *st, const char *key, long val);
 } game_def_t;
 
 static inline const game_round_t *game_round(const void *st) { return (const game_round_t *)st; }

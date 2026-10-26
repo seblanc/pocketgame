@@ -3,7 +3,7 @@
 A small multi-game handheld for the ESP32-S3-LCD-1.54 touch board (ESP-IDF, `source/`).
 Minimal UI: dark background, thin lines, one accent colour.
 
-- **Home screen:** no title, one touch tile per game right below the bar (Tic-tac-toe, Connect 4; all games are for 2 players) and a thin top bar with the battery %
+- **Home screen:** no title, one touch tile per game right below the bar (Tic-tac-toe, Connect 4, Tilt Duel, Hot Potato, Steady Hand; all games are for 2 players) and a thin top bar with the battery %
   (IO1 / VBAT_ADC, 200k/100k divider) and the Wi-Fi state. The bar only shows outside games.
 - **Games** are self-contained modules in `source/main/game/` (one `.c/.h` per game) behind the common
   interface in `game/game.h` (rules, board drawing, touch mapping, UART command); `GAMES[]` in `main.c`
@@ -15,6 +15,12 @@ Minimal UI: dark background, thin lines, one accent colour.
   (`AIM cancelled`) or on a full column (`ERR full column n`) leaves the turn unchanged.
   Four in a row (horizontal, vertical, diagonal) wins and is highlighted; a full board is a draw.
   Blue X / red O discs and banner, same sounds and rules for starting and leaving as tic-tac-toe.
+- **Motion games** use the QMI8658 IMU (I2C 0x6b on the shared bus; axis signs in `board.h`):
+  - **Tilt Duel:** each player taps to start, then tilts the board to roll a ball through an 8x8 maze
+    to the target; the faster run wins, 60 s is a timeout.
+  - **Hot Potato:** a hidden 8-20 s fuse burns; tap to pass after holding 2 s, or shake once per round
+    to skip at once. Whoever holds it at the boom loses.
+  - **Steady Hand:** keep the tilt-driven bubble inside a shrinking circle; the longer survival wins.
 - **Tic-tac-toe:** tap a cell to place X or O; after a win or a draw, tap anywhere for a new game.
   X is blue, O is red: a banner in the player's colour shows who starts ("X STARTS") and whose turn it
   is. The starting player alternates after every finished round (an abandoned round keeps its starter).
@@ -49,7 +55,10 @@ Serial commands (USB-C console, 115200):
 | `play <0-8>` | tic-tac-toe: `BOARD X.O......`, `TURN O`, `WIN X line=0,1,2`, `DRAW`, `ERR occupied\|game over\|bad cell` |
 | `drop <0-6> [<0-6> ...]` | Connect 4, one drop per number: `DROP X col=3 row=0`, `BOARD` + 42 cells (top row first), `TURN O`, `WIN X cells=a,b,c,d`, `DRAW`, `ERR range\|full column n\|game over` |
 | `status` | `STATUS screen=menu game=ttt bat=87 mv=4012 wifi=connected ip=... starter=X vol=70` |
-| `open ttt\|c4`, `back`, `yes`, `no`, `settings` | `SCREEN menu\|game=ttt\|game=c4\|confirm\|settings\|wifi`, `MENU games=2` |
+| `open ttt\|c4\|tilt\|potato\|steady`, `back`, `yes`, `no`, `settings` | `SCREEN menu\|game=<id>\|confirm\|settings\|wifi`, `MENU games=5` |
+| `maze [go]`, `pass`, `hold [go]` | Tilt Duel / Hot Potato / Steady Hand: state or a tap (`GO X`, `PASS X`, `ERR too soon`) |
+| `sim tilt <ax> <ay> <ms>`, `sim shake`, `sim wait <ms>`, `sim fuse <ms>` | motion game on screen, simulated input and clock: `BALL cell=c,r`, `FINISH X ms=n`, `TIMEOUT O`, `SKIP X`, `BOOM X`, `BUBBLE d= r=`, `OUT X ms=n`, `WIN X`; `ERR` elsewhere |
+| `imu` | `IMU ax=.. ay=.. az=..` (mg) |
 | `vol <0-100>` | `VOL n` (0 = silent) |
 | `wifi scan` | `WIFI scan n=<count>`, then `WIFI ap <i> rssi=.. ch=.. secure=0\|1` per network (names stay off the console) |
 | `wifi ssid` / `wifi pass` | `SSID?` / `PASS?`, then the next line is the value; `WIFI saved`, `WIFI connected ip=...` |
@@ -57,6 +66,7 @@ Serial commands (USB-C console, 115200):
 
 Host tests of the rules:
 `gcc -DGAME_RULES_ONLY -I source/main tests/test_game.c source/main/game/tictactoe.c -o test_game && ./test_game`,
-`gcc -DGAME_RULES_ONLY -I source/main tests/test_connect4.c source/main/game/connect4.c -o test_c4 && ./test_c4`
+`gcc -DGAME_RULES_ONLY -I source/main tests/test_connect4.c source/main/game/connect4.c -o test_c4 && ./test_c4`,
+`gcc -DGAME_RULES_ONLY -I source/main tests/test_motion.c source/main/game/tilt.c source/main/game/potato.c source/main/game/steady.c -lm -o test_motion && ./test_motion`
 
 Host test of the list scrolling: `gcc -I source/main tests/test_scroll.c source/main/scroll.c -lm -o test_scroll && ./test_scroll`

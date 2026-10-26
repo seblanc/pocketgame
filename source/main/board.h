@@ -17,6 +17,15 @@
 #define TP_RST 47
 #define TP_INT 48
 
+/* QMI8658 IMU (0x6b on the same bus): how its axes lie under the screen. Assumed, not
+ * checked on the board: sensor x to the screen's right, y to its top. At rest the
+ * accelerometer reads +1 g upwards, so a lowered right edge gives a negative x and a
+ * lowered bottom edge a positive y. Fix the signs (or swap) here if the ball rolls
+ * the wrong way. */
+#define IMU_TILT_X_SIGN (-1)
+#define IMU_TILT_Y_SIGN 1
+#define IMU_SWAP_XY 0
+
 /* ES8311 codec -> NS4150B speaker amplifier */
 #define I2S_MCLK 8
 #define I2S_BCLK 9

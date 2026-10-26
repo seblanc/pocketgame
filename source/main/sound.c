@@ -28,7 +28,8 @@ static const note_t TUNE_WIN[] = {{523, 110}, {659, 110}, {784, 110}, {1047, 240
 static const note_t TUNE_DRAW[] = {{440, 160}, {330, 260}, {0, 0}};
 static const note_t TUNE_NEW[] = {{880, 50}, {1175, 70}, {0, 0}};
 static const note_t TUNE_TICK[] = {{990, 32, true}, {0, 0}}; /* slider and scroll steps */
-static const note_t *const TUNES[] = {TUNE_X, TUNE_O, TUNE_BAD, TUNE_WIN, TUNE_DRAW, TUNE_NEW, TUNE_TICK};
+static const note_t TUNE_BOOM[] = {{196, 70}, {131, 90}, {98, 120}, {65, 360}, {0, 0}}; /* Hot Potato */
+static const note_t *const TUNES[] = {TUNE_X, TUNE_O, TUNE_BAD, TUNE_WIN, TUNE_DRAW, TUNE_NEW, TUNE_TICK, TUNE_BOOM};
 
 static QueueHandle_t s_q;
 static i2s_chan_handle_t s_tx;

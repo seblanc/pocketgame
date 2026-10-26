@@ -1,7 +1,8 @@
 /* PocketGame: a small multi-game handheld on the ESP32-S3-LCD-1.54 touch board.
  *
  * Screens: home menu (one tile per game, top bar with battery % and Wi-Fi), the
- * games (tic-tac-toe and Connect 4, modules in game/), a leave-game confirmation,
+ * games (tic-tac-toe, Connect 4 and the IMU games Tilt Duel, Hot Potato and Steady
+ * Hand, modules in game/), a leave-game confirmation,
  * Settings (volume, where 0 is silent, and Wi-Fi) and the Wi-Fi setup hotspot screen.
  *
  * Buttons: a short press on LEFT goes back (asking first while a game is running);
@@ -16,6 +17,14 @@
  *                              ERR occupied | ERR game over | ERR bad cell
  *   drop <0-6> [<0-6> ...]     Connect 4 (switches to it): WIN X cells=a,b,c,d | DRAW,
  *                              ERR range | ERR full column n | ERR game over
+ *   maze [go] | pass | hold [go]   Tilt Duel / Hot Potato / Steady Hand (switch to it):
+ *                              the state, or a tap (start the run / pass the potato)
+ *   sim tilt <ax> <ay> <ms>    motion game on screen: <ms> of a made-up screen tilt in mg
+ *   sim shake | sim wait <ms>  a shake / time passing on a level board; sim <key> <val>
+ *                              sets a game value (sim fuse <ms>). Replies with the game's
+ *                              events and one state line (BALL | BUBBLE | POTATO ...);
+ *                              from then on the round ignores the sensor and the clock
+ *   imu                        IMU ax=.. ay=.. az=.. (mg) | ERR imu not found
  *   status                     STATUS screen=menu bat=.. mv=.. wifi=.. ip=.. starter=X vol=.. fw=v..
  *   open <id> | back | yes | no | settings      navigation, replies SCREEN ...
  *   vol <0-100>                                 VOL n (saved in NVS, 0 = silent)
@@ -24,6 +33,7 @@
  *                                               replies WIFI scan n=<count>, one line per AP
  */
 #include <ctype.h>
+#include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -42,10 +52,15 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "esp_random.h"
 #include "game/connect4.h"
+#include "game/potato.h"
+#include "game/steady.h"
 #include "game/tictactoe.h"
+#include "game/tilt.h"
 #include "hal/usb_serial_jtag_ll.h"
 #include "i2cbus.h"
+#include "imu.h"
 #include "net.h"
 #include "scroll.h"
 #include "settings.h"
@@ -60,7 +75,7 @@
 #define BATTERY_S 20
 
 /* the home menu tiles, in order; the first one is the default game */
-const game_def_t *const GAMES[] = {&TICTACTOE, &CONNECT4};
+const game_def_t *const GAMES[] = {&TICTACTOE, &CONNECT4, &TILT_DUEL, &HOT_POTATO, &STEADY_HAND};
 const int GAME_COUNT = sizeof(GAMES) / sizeof(GAMES[0]);
 _Static_assert(sizeof(GAMES) / sizeof(GAMES[0]) <= GAME_MAX, "raise GAME_MAX");
 
@@ -70,6 +85,9 @@ static SemaphoreHandle_t s_lock;
 static TaskHandle_t s_display_task;
 static app_view_t s_v;                    /* under s_lock */
 static screen_t s_settings_from = SCR_MENU; /* where Settings returns to */
+static bool s_sim[GAME_MAX];              /* under s_lock: the round is driven over UART */
+
+uint32_t game_random(void) { return esp_random(); }
 
 void app_out(const char *fmt, ...)
 {
@@ -141,6 +159,7 @@ static void print_board_locked(void) { GAMES[s_v.game_idx]->print(slot_locked()-
 static void new_round_locked(void)
 {
     GAMES[s_v.game_idx]->new_round(slot_locked()->st.bytes, slot_locked()->next_starter);
+    s_sim[s_v.game_idx] = false; /* the sensor and the clock drive the new round */
 }
 
 static void print_ready_locked(void) { out("READY turn=%c", game_mark_char(round_locked()->starter)); }
@@ -186,10 +205,10 @@ static void moved_locked(game_event_t ev)
 {
     game_slot_t *s = slot_locked();
     const game_round_t *r = round_locked();
-    if (ev == GEV_WIN || ev == GEV_DRAW) {
+    if (ev == GEV_WIN || ev == GEV_DRAW || ev == GEV_BOOM) {
         s->next_starter = game_other(r->starter);
     }
-    if (ev == GEV_WIN) {
+    if (ev == GEV_WIN || ev == GEV_BOOM) {
         if (r->winner == CELL_X) {
             s->wins_x++;
         } else {
@@ -202,7 +221,7 @@ static void play_event(game_event_t ev)
 {
     static const sound_t SOUNDS[] = {
         [GEV_MOVE_X] = SND_X, [GEV_MOVE_O] = SND_O, [GEV_BAD] = SND_BAD,
-        [GEV_WIN] = SND_WIN,  [GEV_DRAW] = SND_DRAW,
+        [GEV_WIN] = SND_WIN,  [GEV_DRAW] = SND_DRAW, [GEV_BOOM] = SND_BOOM,
     };
     if (ev != GEV_NONE) {
         sound_play(SOUNDS[ev]);
@@ -436,6 +455,73 @@ static void handle_wifi(const char *arg)
     }
 }
 
+#define SIM_STEP_MS 20
+
+/* sim ...: drives the motion game on screen with made-up input on a simulated clock */
+static void handle_sim(const char *arg)
+{
+    char key[12] = "";
+    long a = 0, b = 0, c = 0;
+    int n = sscanf(arg, "%11s %ld %ld %ld", key, &a, &b, &c);
+    lock();
+    const game_def_t *g = GAMES[s_v.game_idx];
+    if (s_v.screen != SCR_GAME || !g->step) {
+        unlock();
+        out("ERR sim needs a motion game on screen (open tilt | potato | steady)");
+        return;
+    }
+    motion_t m = {.sim = true};
+    long ms = 0;
+    if (strcmp(key, "tilt") == 0 && n == 4 && c >= 0 && c <= 600000) {
+        m.tx = (int)a;
+        m.ty = (int)b;
+        ms = c;
+    } else if (strcmp(key, "wait") == 0 && n == 2 && a >= 0 && a <= 600000) {
+        ms = a;
+    } else if (strcmp(key, "shake") == 0 && n == 1) {
+        m.shake = true;
+    } else if (n == 2 && g->sim_set && g->sim_set(slot_locked()->st.bytes, key, a)) {
+        s_sim[s_v.game_idx] = true;
+        unlock();
+        return;
+    } else {
+        unlock();
+        out("ERR sim (tilt <ax> <ay> <ms> | shake | wait <ms>%s)", g->sim_set ? " | fuse <ms>" : "");
+        return;
+    }
+    s_sim[s_v.game_idx] = true;
+    void *st = slot_locked()->st.bytes;
+    game_event_t last = GEV_NONE;
+    /* in steps like the live sensor's; a run that ends (or a shake) stops the rest */
+    do {
+        m.dt_ms = ms < SIM_STEP_MS ? (uint32_t)ms : SIM_STEP_MS;
+        ms -= m.dt_ms;
+        game_event_t ev = g->step(st, &m);
+        m.shake = false;
+        if (ev != GEV_NONE) {
+            moved_locked(ev);
+            last = ev;
+            break;
+        }
+    } while (ms > 0);
+    g->report(st);
+    unlock();
+    play_event(last);
+    request_redraw();
+}
+
+static void handle_imu(void)
+{
+    int ax, ay, az;
+    if (!imu_read_mg(&ax, &ay, &az)) {
+        out("ERR imu not found");
+        return;
+    }
+    int tx, ty;
+    imu_screen_tilt(ax, ay, &tx, &ty);
+    out("IMU ax=%d ay=%d az=%d tilt=%d,%d", ax, ay, az, tx, ty);
+}
+
 static void handle_line(char *line)
 {
     while (isspace((unsigned char)*line)) {
@@ -494,6 +580,10 @@ static void handle_line(char *line)
         }
     } else if (strcmp(line, "wifi") == 0) {
         handle_wifi(arg);
+    } else if (strcmp(line, "sim") == 0) {
+        handle_sim(arg);
+    } else if (strcmp(line, "imu") == 0) {
+        handle_imu();
     } else {
         for (int i = 0; i < GAME_COUNT; i++) {
             if (strcmp(line, GAMES[i]->verb) == 0) {
@@ -501,8 +591,8 @@ static void handle_line(char *line)
                 return;
             }
         }
-        out("ERR unknown command (new | play <0-8> | drop <0-6> ... | board | status | open ttt|c4 | back | "
-            "yes | no | settings | vol <0-100> | wifi ...)");
+        out("ERR unknown command (new | play <0-8> | drop <0-6> ... | maze | pass | hold | sim ... | imu | board | "
+            "status | open ttt|c4|tilt|potato|steady | back | yes | no | settings | vol <0-100> | wifi ...)");
     }
 }
 
@@ -761,6 +851,60 @@ static void touch_task(void *arg)
     }
 }
 
+/* The motion games run on the live sensor and the real clock: every MOTION_MS the tilt
+ * (lightly smoothed) and shakes go to the game on screen, unless its round is driven
+ * over UART (sim). A shake is a jolt of the measured acceleration far from 1 g. */
+#define MOTION_MS 20
+#define SHAKE_MG 1300     /* | |a| - 1 g | above this is a shake */
+#define SHAKE_QUIET_MS 700 /* one shake, not one per jolt of it */
+#define REDRAW_EVERY 2     /* motion ticks per frame while a round runs */
+
+static void motion_task(void *arg)
+{
+    float fx = 0, fy = 0;
+    uint32_t last = now_ms(), shake_at = 0;
+    for (int tick = 0;; tick++) {
+        vTaskDelay(pdMS_TO_TICKS(MOTION_MS));
+        uint32_t now = now_ms(), dt = now - last;
+        last = now;
+        int ax = 0, ay = 0, az = 1000, tx = 0, ty = 0;
+        bool live = imu_read_mg(&ax, &ay, &az);
+        if (live) {
+            imu_screen_tilt(ax, ay, &tx, &ty);
+        }
+        fx += (tx - fx) * 0.35f;
+        fy += (ty - fy) * 0.35f;
+        float mag = sqrtf((float)ax * ax + (float)ay * ay + (float)az * az);
+        bool shake = false;
+        if (live && fabsf(mag - 1000) > SHAKE_MG && now - shake_at > SHAKE_QUIET_MS) {
+            shake = true;
+            shake_at = now;
+        }
+
+        lock();
+        const game_def_t *g = GAMES[s_v.game_idx];
+        bool on = s_v.screen == SCR_GAME && g->step && !s_sim[s_v.game_idx];
+        game_event_t ev = GEV_NONE;
+        bool running = false;
+        if (on) {
+            motion_t m = {.tx = (int)fx, .ty = (int)fy, .shake = shake, .dt_ms = dt > 200 ? 200 : dt};
+            if (shake) {
+                out("SHAKE mg=%d", (int)mag);
+            }
+            ev = g->step(slot_locked()->st.bytes, &m);
+            moved_locked(ev);
+            running = round_locked()->status == GAME_PLAYING;
+        }
+        unlock();
+        if (on) {
+            play_event(ev);
+            if (running && tick % REDRAW_EVERY == 0) {
+                request_redraw();
+            }
+        }
+    }
+}
+
 /* Middle key held 3 s: release the battery latch. On battery the board loses power once
  * the key is let go (the key itself powers it while held); on USB it stays powered, so
  * it sleeps instead and the next press of the key wakes it. Does not return. */
@@ -925,6 +1069,11 @@ void app_main(void)
     } else {
         out("TOUCH NONE: no touch controller answered on I2C");
     }
+    if (err == ESP_OK && imu_init()) {
+        out("IMU OK chip=qmi8658 addr=0x%02x rev=0x%02x sda=%d scl=%d", IMU_ADDR, imu_rev(), I2C_SDA, I2C_SCL);
+    } else {
+        out("IMU NONE: no QMI8658 at 0x%02x (motion games run without the sensor)", IMU_ADDR);
+    }
 
     out("KEYS left=%d right=%d pwr=%d (pwr: hold 3 s to power off)", KEY_LEFT, KEY_RIGHT, KEY_PWR);
 
@@ -950,6 +1099,7 @@ void app_main(void)
         xTaskCreate(touch_task, "touch", 4096, NULL, 5, NULL);
     }
     xTaskCreate(heartbeat_task, "heartbeat", 3072, NULL, 3, NULL);
+    xTaskCreate(motion_task, "motion", 4096, NULL, 5, NULL);
 
     lock();
     show_locked(SCR_MENU);
