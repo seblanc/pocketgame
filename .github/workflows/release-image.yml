@@ -5,6 +5,7 @@ name: Release image
 # the NOSTROMO test build keeps the default version from source/CMakeLists.txt.
 # Runs when a release is published, by hand for a given tag, and once on main when this
 # workflow changes (then for the latest release, e.g. one published before it existed).
+# A release tagged at a commit without this file does not trigger it: use workflow_dispatch.
 on:
   release:
     types: [published]
