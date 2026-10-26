@@ -81,6 +81,8 @@ typedef struct {
     void (*report)(const void *st);
     /* "sim <key> <value>" of this game (Hot Potato: fuse); false for an unknown key */
     bool (*sim_set)(void *st, const char *key, long val);
+    /* "sim solve" (Tilt Duel): sets m's tilt for the next step toward the goal */
+    void (*autopilot)(const void *st, motion_t *m);
     /* optional help screen (a "?" on the game screen, "rules" on the console): its lines
      * (NULL-terminated, up to 12 lines of 36 characters) and the console summary after "RULES " */
     const char *const *rules;

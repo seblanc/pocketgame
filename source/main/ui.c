@@ -155,7 +155,10 @@ static void draw_menu(const app_view_t *v)
         gfx_text(r.x + 72, r.y + (r.h - 14) / 2, GAMES[i]->title, 2, COL_TEXT);
     }
     gfx_clip_y(0, SCREEN_H);
-    gfx_text_mid(SCREEN_W / 2, 226, "HOLD L + R FOR SETTINGS", 1, COL_DIM);
+    if (v->hint_dy < HINT_SLIDE_PX) {
+        /* slides down off the bottom edge a few seconds after the menu opens */
+        gfx_text_mid(SCREEN_W / 2, 226 + v->hint_dy, "HOLD L + R FOR SETTINGS", 1, COL_DIM);
+    }
 }
 
 /* scores and turn banner around the board of the game being played */
@@ -438,7 +441,7 @@ void ui_render(const app_view_t *v)
         break;
     case SCR_OFF:
         gfx_text_mid(SCREEN_W / 2, 100, "POWERING OFF", 2, COL_TEXT);
-        gfx_text_mid(SCREEN_W / 2, 130, "RELEASE THE BUTTON", 1, COL_DIM);
+        gfx_text_mid(SCREEN_W / 2, 130, v->off_idle ? "NO INPUT FOR 60 S" : "RELEASE THE BUTTON", 1, COL_DIM);
         break;
     case SCR_RULES:
         draw_rules(v);

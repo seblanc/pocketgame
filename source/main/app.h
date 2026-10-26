@@ -38,7 +38,11 @@ typedef struct {
     char ap_name[24];
     char version[33]; /* build id (commit) from the app description */
     ota_view_t ota;   /* the updater (update screen) */
+    int hint_dy;      /* px the menu's "hold L + R" hint has slid down (HINT_SLIDE_PX: gone) */
+    bool off_idle;    /* the off screen is for the idle power-off, not the power key */
 } app_view_t;
+
+#define HINT_SLIDE_PX 16
 
 /* human-readable firmware version, defined once in source/CMakeLists.txt */
 #ifndef FW_VERSION

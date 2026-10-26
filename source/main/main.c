@@ -8,7 +8,13 @@
  *
  * Buttons: a short press on LEFT goes back (asking first while a game is running);
  * holding LEFT + RIGHT for 3 s opens Settings. The middle button is only the power
- * key: holding it 3 s powers the board off (or sleeps it on USB).
+ * key: holding it 3 s powers the board off (or sleeps it on USB). The home menu's
+ * "hold L + R" hint slides down off the screen 3 s after the menu opens.
+ *
+ * Idle power-off: 60 s without a touch or a button press (a running motion game's
+ * tilt counts too; the console does not) releases the battery latch. Plugged into a
+ * computer the board stays powered, so it only switches the display off until the
+ * next touch or key; on a charger without a computer it deep-sleeps until the power key.
  *
  * Serial protocol (USB Serial/JTAG console, one command per line):
  *   new | board                a new round / the board of the game on screen (tic-tac-toe
@@ -22,9 +28,13 @@
  *                              the state, or a tap (start the run / pass the potato)
  *   sim tilt <ax> <ay> <ms>    motion game on screen: <ms> of a made-up screen tilt in mg
  *   sim shake | sim wait <ms>  a shake / time passing on a level board; sim <key> <val>
- *                              sets a game value (sim fuse <ms>). Replies with the game's
+ *                              sets a game value (sim fuse <ms>, sim seed <n>: the next
+ *                              Tilt Duel maze); sim solve rolls the Tilt Duel ball out of
+ *                              the maze. Replies with the game's
  *                              events and one state line (BALL | BUBBLE | POTATO ...);
  *                              from then on the round ignores the sensor and the clock
+ *   sim idle <ms> | sim touch  any screen: the idle timer jumps ahead (SIM idle=ms) / a
+ *                              touch (INPUT touch; wakes a dark board: POWER wake ...)
  *   imu                        IMU ax=.. ay=.. az=.. raw_ax=.. (mg; ax is the games' X axis,
  *                              the raw one inverted) | ERR imu not found
  *   rules                      the help screen of the game on screen (Hot Potato):
@@ -36,6 +46,7 @@
  *                              UPDATE result=newer|same|older latest=.. current=.. | UPDATE ERR ..;
  *                              install flashes its pocketgame.bin
  *   status                     STATUS screen=menu bat=.. mv=.. wifi=.. ip=.. starter=X vol=.. fw=v..
+ *                              idle=s/60s power=on|off|dark hint=shown|sliding|hidden
  *   open <id> | back | yes | no | settings      navigation, replies SCREEN ...
  *   vol <0-100>                                 VOL n (saved in NVS, 0 = silent)
  *   wifi [ssid | pass | scan | setup | stop | forget]  ssid/pass ask SSID? / PASS? and
@@ -69,6 +80,7 @@
 #include "game/tictactoe.h"
 #include "game/tilt.h"
 #include "hal/usb_serial_jtag_ll.h"
+#include "soc/usb_serial_jtag_struct.h"
 #include "i2cbus.h"
 #include "imu.h"
 #include "net.h"
@@ -84,6 +96,10 @@
 #define POWER_HOLD_MS 3000
 #define HEARTBEAT_S 10
 #define BATTERY_S 20
+#define IDLE_OFF_MS 60000
+#define HINT_SHOW_MS 3000
+#define HINT_SLIDE_MS 400
+#define TIMER_MS 30 /* the hint animation and the idle check */
 
 /* the home menu tiles, in order; the first one is the default game */
 const game_def_t *const GAMES[] = {&TICTACTOE, &CONNECT4, &TILT_DUEL, &HOT_POTATO, &STEADY_HAND};
@@ -98,7 +114,22 @@ static app_view_t s_v;                    /* under s_lock */
 static screen_t s_settings_from = SCR_MENU; /* where Settings returns to */
 static bool s_sim[GAME_MAX];              /* under s_lock: the round is driven over UART */
 
+/* power: on; off = the idle power-off is under way; dark = released the latch but USB
+ * keeps the board running, display off until the next touch or key */
+typedef enum { PWR_ON, PWR_OFF, PWR_DARK } power_t;
+static const char *const POWER_NAMES[] = {"on", "off", "dark"};
+static power_t s_power;     /* under s_lock */
+static uint32_t s_input_ms; /* under s_lock: the last touch or key, the idle timer's start */
+
+/* the menu hint: shown when the menu opens, slides off after HINT_SHOW_MS */
+typedef enum { HINT_SHOWN, HINT_SLIDING, HINT_HIDDEN } hint_t;
+static const char *const HINT_NAMES[] = {"shown", "sliding", "hidden"};
+static hint_t s_hint = HINT_HIDDEN; /* under s_lock */
+static uint32_t s_hint_at;  /* under s_lock */
+
 uint32_t game_random(void) { return esp_random(); }
+
+static uint32_t now_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
 
 void app_out(const char *fmt, ...)
 {
@@ -148,6 +179,10 @@ static void show_locked(screen_t s)
     }
     if (s == SCR_MENU) {
         out("MENU games=%d", GAME_COUNT);
+        s_hint = HINT_SHOWN;
+        s_hint_at = now_ms();
+        s_v.hint_dy = 0;
+        out("HINT settings show");
     }
     request_redraw();
 }
@@ -423,24 +458,41 @@ static void snapshot(app_view_t *v)
     ota_get_view(&v->ota);
 }
 
+/* seconds without a touch or key */
+static unsigned idle_s(void)
+{
+    lock();
+    uint32_t ms = now_ms() - s_input_ms;
+    unlock();
+    return ms / 1000;
+}
+
 static void print_status(void)
 {
     app_view_t v;
     snapshot(&v);
-    out("STATUS screen=%s game=%s bat=%d mv=%d wifi=%s ip=%s starter=%c vol=%d fw=%s", SCREEN_NAMES[v.screen],
-        GAMES[v.game_idx]->id, v.bat_pct, v.bat_mv, net_state_name(v.wifi), v.ip[0] ? v.ip : "-",
-        game_mark_char(game_round(v.games[v.game_idx].st.bytes)->starter), v.vol, FW_VERSION);
+    lock();
+    power_t pwr = s_power;
+    hint_t hint = s_hint;
+    unlock();
+    out("STATUS screen=%s game=%s bat=%d mv=%d wifi=%s ip=%s starter=%c vol=%d fw=%s idle=%u/%ds power=%s hint=%s",
+        SCREEN_NAMES[v.screen], GAMES[v.game_idx]->id, v.bat_pct, v.bat_mv, net_state_name(v.wifi),
+        v.ip[0] ? v.ip : "-", game_mark_char(game_round(v.games[v.game_idx].st.bytes)->starter), v.vol, FW_VERSION,
+        idle_s(), IDLE_OFF_MS / 1000, POWER_NAMES[pwr], HINT_NAMES[hint]);
 }
 
 void app_status_json(char *buf, size_t n)
 {
     app_view_t v;
     snapshot(&v);
+    lock();
+    power_t pwr = s_power;
+    unlock();
     snprintf(buf, n,
              "{\"app\":\"pocketgame\",\"fw\":\"%s\",\"version\":\"%s\",\"screen\":\"%s\",\"games\":%d,"
-             "\"battery\":{\"mv\":%d,\"pct\":%d},\"wifi\":\"%s\",\"ip\":\"%s\",\"vol\":%d}",
+             "\"battery\":{\"mv\":%d,\"pct\":%d},\"wifi\":\"%s\",\"ip\":\"%s\",\"vol\":%d,\"idle_s\":%u,\"power\":\"%s\"}",
              FW_VERSION, v.version, SCREEN_NAMES[v.screen], GAME_COUNT, v.bat_mv, v.bat_pct, net_state_name(v.wifi), v.ip,
-             v.vol);
+             v.vol, idle_s(), POWER_NAMES[pwr]);
 }
 
 static void read_battery(void)
@@ -454,6 +506,139 @@ static void read_battery(void)
     unlock();
     if (changed && menu) {
         request_redraw();
+    }
+}
+
+/* ---- power: idle power-off ---- */
+
+/* Is a computer on the USB port? Its host sends a start-of-frame every millisecond,
+ * whose number the USB Serial/JTAG block keeps. */
+static bool usb_host_connected(void)
+{
+    uint32_t a = USB_SERIAL_JTAG.fram_num.sof_frame_index;
+    vTaskDelay(pdMS_TO_TICKS(5));
+    return USB_SERIAL_JTAG.fram_num.sof_frame_index != a;
+}
+
+/* With the latch released but USB power on: sleep until the power key is pressed.
+ * Does not return (the wake-up is a fresh boot). */
+static void sleep_until_power_key(void)
+{
+    vTaskDelay(pdMS_TO_TICKS(50));
+    gpio_hold_en(LCD_BL);
+    gpio_hold_en(BAT_EN);
+    gpio_deep_sleep_hold_en();
+    rtc_gpio_pullup_en(KEY_PWR);
+    rtc_gpio_pulldown_dis(KEY_PWR);
+    esp_sleep_enable_ext0_wakeup(KEY_PWR, 0);
+    esp_deep_sleep_start();
+}
+
+/* A touch or key press: restarts the idle timer. Returns true when it was used up by
+ * the power state (it woke the dark board, or the board is switching off), so it must
+ * not act on the screen. */
+static bool app_input(const char *src)
+{
+    lock();
+    power_t was = s_power;
+    if (was != PWR_OFF) {
+        s_input_ms = now_ms();
+    }
+    if (was == PWR_DARK) {
+        s_power = PWR_ON;
+    }
+    unlock();
+    if (was == PWR_DARK) {
+        gpio_set_level(BAT_EN, 1); /* latched again: pulling USB no longer cuts the power */
+        gpio_set_level(LCD_BL, 1);
+        out("POWER wake reason=%s", src);
+        request_redraw();
+    }
+    return was != PWR_ON;
+}
+
+/* activity that keeps the board on but never wakes it (motion games, downloads) */
+static void keep_awake(void)
+{
+    lock();
+    if (s_power == PWR_ON) {
+        s_input_ms = now_ms();
+    }
+    unlock();
+}
+
+/* 60 s without input. With a computer on USB (which powers the board whatever the
+ * latch) the display just goes dark, so the serial console, Wi-Fi and over-the-air
+ * updates keep working; otherwise the off screen, then the latch is released: on
+ * battery the power goes, on a charger the board deep-sleeps until the power key. */
+static void idle_power_off(void)
+{
+    out("POWER off reason=idle after=%ds", IDLE_OFF_MS / 1000);
+    if (usb_host_connected()) {
+        gpio_set_level(LCD_BL, 0);
+        gpio_set_level(BAT_EN, 0);
+        lock();
+        s_power = PWR_DARK;
+        unlock();
+        out("POWER usb: display off, waiting for input");
+        return;
+    }
+    lock();
+    s_v.off_idle = true;
+    show_locked(SCR_OFF);
+    unlock();
+    sound_play(SND_TICK);
+    vTaskDelay(pdMS_TO_TICKS(1500)); /* let the off screen be seen */
+    gpio_set_level(LCD_BL, 0);
+    gpio_set_level(BAT_EN, 0);
+    vTaskDelay(pdMS_TO_TICKS(800));
+    /* still running: powered over USB by a charger */
+    out("POWER usb: no computer, sleeping until the power key is pressed");
+    sleep_until_power_key();
+}
+
+/* the menu hint's slide (ease-in) and the idle timer */
+static void timer_task(void *arg)
+{
+    for (;;) {
+        vTaskDelay(pdMS_TO_TICKS(TIMER_MS));
+        ota_view_t o;
+        ota_get_view(&o);
+        if (o.state == OTA_CHECKING || o.state == OTA_DOWNLOADING || o.state == OTA_REBOOTING ||
+            net_state() == WIFI_SETUP) {
+            keep_awake(); /* a download or the phone setup takes as long as it takes */
+        }
+
+        bool redraw = false;
+        lock();
+        uint32_t now = now_ms(); /* under the lock: never before a time another task just set */
+        if (s_v.screen == SCR_MENU && s_hint != HINT_HIDDEN) {
+            uint32_t t = now - s_hint_at;
+            int dy = 0;
+            if (t > HINT_SHOW_MS) {
+                s_hint = HINT_SLIDING;
+                float p = (float)(t - HINT_SHOW_MS) / HINT_SLIDE_MS;
+                dy = p >= 1 ? HINT_SLIDE_PX : (int)(p * p * HINT_SLIDE_PX);
+            }
+            if (dy >= HINT_SLIDE_PX) {
+                dy = HINT_SLIDE_PX;
+                s_hint = HINT_HIDDEN;
+                out("HINT settings hide ms=%lu", (unsigned long)t);
+            }
+            redraw = dy != s_v.hint_dy;
+            s_v.hint_dy = dy;
+        }
+        bool idle = s_power == PWR_ON && now - s_input_ms >= IDLE_OFF_MS;
+        if (idle) {
+            s_power = PWR_OFF;
+        }
+        unlock();
+        if (redraw) {
+            request_redraw();
+        }
+        if (idle) {
+            idle_power_off();
+        }
     }
 }
 
@@ -530,6 +715,19 @@ static void handle_sim(const char *arg)
     char key[12] = "";
     long a = 0, b = 0, c = 0;
     int n = sscanf(arg, "%11s %ld %ld %ld", key, &a, &b, &c);
+    /* the idle timer, on any screen */
+    if (strcmp(key, "idle") == 0 && n == 2 && a >= 0 && a <= 600000) {
+        lock();
+        s_input_ms -= (uint32_t)a;
+        unlock();
+        out("SIM idle=%ld", a);
+        return;
+    }
+    if (strcmp(key, "touch") == 0 && n == 1) {
+        out("INPUT touch");
+        app_input("touch");
+        return;
+    }
     lock();
     const game_def_t *g = GAMES[s_v.game_idx];
     if (s_v.screen != SCR_GAME || !g->step) {
@@ -539,7 +737,11 @@ static void handle_sim(const char *arg)
     }
     motion_t m = {.sim = true};
     long ms = 0;
-    if (strcmp(key, "tilt") == 0 && n == 4 && c >= 0 && c <= 600000) {
+    bool solve = false;
+    if (strcmp(key, "solve") == 0 && n == 1 && g->autopilot) {
+        solve = true;
+        ms = 65000; /* past the 60 s limit of a run */
+    } else if (strcmp(key, "tilt") == 0 && n == 4 && c >= 0 && c <= 600000) {
         m.tx = (int)a;
         m.ty = (int)b;
         ms = c;
@@ -553,7 +755,8 @@ static void handle_sim(const char *arg)
         return;
     } else {
         unlock();
-        out("ERR sim (tilt <ax> <ay> <ms> | shake | wait <ms>%s)", g->sim_set ? " | fuse <ms>" : "");
+        out("ERR sim (tilt <ax> <ay> <ms> | shake | wait <ms>%s | idle <ms> | touch)",
+            g->autopilot ? " | seed <n> | solve" : g->sim_set ? " | fuse <ms>" : "");
         return;
     }
     s_sim[s_v.game_idx] = true;
@@ -563,6 +766,9 @@ static void handle_sim(const char *arg)
     do {
         m.dt_ms = ms < SIM_STEP_MS ? (uint32_t)ms : SIM_STEP_MS;
         ms -= m.dt_ms;
+        if (solve) {
+            g->autopilot(st, &m);
+        }
         game_event_t ev = g->step(st, &m);
         m.shake = false;
         if (ev != GEV_NONE) {
@@ -817,8 +1023,6 @@ static hit_t on_press(int x, int y, int *arg)
 #define SLIDER_DEAD_PX 2 /* touch jitter on a resting finger does not move the volume */
 #define TOUCH_MS 20
 
-static uint32_t now_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
-
 static void play_tick(uint32_t *last)
 {
     uint32_t now = now_ms();
@@ -851,7 +1055,7 @@ static void publish_scroll(screen_t s, const scroller_t *sc)
 
 static void touch_task(void *arg)
 {
-    bool was = false, slider = false, moved = false;
+    bool was = false, slider = false, moved = false, waking = false;
     bool aim = false; /* aiming in a drag game: the move is made on release */
     hit_t pending = HIT_NONE; /* list tap waiting for the release */
     int pending_arg = -1, last_vol = -1, slider_x = 0;
@@ -881,6 +1085,17 @@ static void touch_task(void *arg)
         int x = 0, y = 0;
         bool down = touch_read(&x, &y);
         uint32_t now = now_ms();
+        if (down && !was && app_input("touch")) {
+            waking = true;
+        }
+        if (waking) {
+            /* the touch that woke the display does nothing else, up to its release */
+            waking = down;
+            was = down;
+            last_ms = now;
+            vTaskDelay(pdMS_TO_TICKS(TOUCH_MS));
+            continue;
+        }
         if (down && !was) {
             bool gliding = sc && scroll_moving(sc); /* a touch on a moving list only stops it */
             moved = false;
@@ -973,10 +1188,11 @@ static void touch_task(void *arg)
 #define SHAKE_MG 1300     /* | |a| - 1 g | above this is a shake */
 #define SHAKE_QUIET_MS 700 /* one shake, not one per jolt of it */
 #define REDRAW_EVERY 2     /* motion ticks per frame while a round runs */
+#define MOVED_MG 150       /* a tilt change this big in a motion game restarts the idle timer */
 
 static void motion_task(void *arg)
 {
-    float fx = 0, fy = 0;
+    float fx = 0, fy = 0, ref_x = 0, ref_y = 0;
     uint32_t last = now_ms(), shake_at = 0;
     for (int tick = 0;; tick++) {
         vTaskDelay(pdMS_TO_TICKS(MOTION_MS));
@@ -1011,6 +1227,12 @@ static void motion_task(void *arg)
             running = round_locked()->status == GAME_PLAYING;
         }
         unlock();
+        if (on && (shake || fabsf(fx - ref_x) + fabsf(fy - ref_y) > MOVED_MG)) {
+            /* a motion game is played by tilting: that is input for the idle timer */
+            ref_x = fx;
+            ref_y = fy;
+            keep_awake();
+        }
         if (on) {
             play_event(ev);
             if (running && tick % REDRAW_EVERY == 0) {
@@ -1026,8 +1248,11 @@ static void motion_task(void *arg)
 static void power_off(void)
 {
     lock();
+    s_power = PWR_OFF;
+    s_v.off_idle = false;
     show_locked(SCR_OFF);
     unlock();
+    gpio_set_level(LCD_BL, 1); /* the key also switches off a dark board */
     out("POWER off: release the power key");
     vTaskDelay(pdMS_TO_TICKS(300)); /* let the screen draw */
     while (gpio_get_level(KEY_PWR) == 0) {
@@ -1040,14 +1265,7 @@ static void power_off(void)
 
     /* still running: powered over USB */
     out("POWER usb: sleeping until the power key is pressed");
-    vTaskDelay(pdMS_TO_TICKS(50));
-    gpio_hold_en(LCD_BL);
-    gpio_hold_en(BAT_EN);
-    gpio_deep_sleep_hold_en();
-    rtc_gpio_pullup_en(KEY_PWR);
-    rtc_gpio_pulldown_dis(KEY_PWR);
-    esp_sleep_enable_ext0_wakeup(KEY_PWR, 0);
-    esp_deep_sleep_start();
+    sleep_until_power_key();
 }
 
 static void button_task(void *arg)
@@ -1092,7 +1310,8 @@ static void button_task(void *arg)
             if (d) {
                 out("BTN %s down gpio=%d", NAMES[i], PINS[i]);
                 down_at[i] = now;
-                used[i] = false;
+                /* a press that wakes the dark display does nothing else */
+                used[i] = app_input("button");
             } else {
                 bool short_press = !used[i] && now - down_at[i] < pdMS_TO_TICKS(SHORT_PRESS_MS);
                 if (short_press && i == 0) {
@@ -1190,7 +1409,8 @@ void app_main(void)
         out("IMU NONE: no QMI8658 at 0x%02x (motion games run without the sensor)", IMU_ADDR);
     }
 
-    out("KEYS left=%d right=%d pwr=%d (pwr: hold 3 s to power off)", KEY_LEFT, KEY_RIGHT, KEY_PWR);
+    out("KEYS left=%d right=%d pwr=%d (pwr: hold 3 s to power off; idle off after %d s)", KEY_LEFT, KEY_RIGHT,
+        KEY_PWR, IDLE_OFF_MS / 1000);
 
     settings_init();
     s_v.vol = settings_load_volume();
@@ -1218,6 +1438,8 @@ void app_main(void)
     }
     xTaskCreate(heartbeat_task, "heartbeat", 3072, NULL, 3, NULL);
     xTaskCreate(motion_task, "motion", 4096, NULL, 5, NULL);
+    s_input_ms = now_ms(); /* the idle timer starts with the menu */
+    xTaskCreate(timer_task, "timer", 4096, NULL, 4, NULL);
 
     lock();
     show_locked(SCR_MENU);
