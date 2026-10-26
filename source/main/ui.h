@@ -5,6 +5,7 @@ typedef enum {
     HIT_NONE,
     HIT_TILE,       /* arg = game index */
     HIT_MOVE,       /* arg = the game's move: cell, column... */
+    HIT_AIM,        /* drag game: arg = the move under the finger (-1 none), made on release */
     HIT_NEW_GAME,   /* tap anywhere after a finished game */
     HIT_YES,
     HIT_NO,

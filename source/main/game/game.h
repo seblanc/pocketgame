@@ -1,4 +1,5 @@
 #pragma once
+#include <stdbool.h>
 #include <stdint.h>
 
 /* The common game interface. Each game is one module in this folder (its rules,
@@ -50,8 +51,12 @@ typedef struct {
     game_event_t (*command)(void *st, const char *arg);
     /* the move for a tap at x,y on a running round, -1 for none */
     int (*hit)(int x, int y);
-    /* the board, below the turn banner (y >= 36) */
-    void (*draw)(const void *st);
+    /* true: a touch aims (press, drag) and the move is made on release, at the move
+     * hit() gives under the finger; false: the move is made on the press */
+    bool drag;
+    /* the board, below the turn banner (y >= 36); preview: the move being aimed (drag
+     * games, -1 for none), shown in the top strip instead of the banner and scores */
+    void (*draw)(const void *st, int preview);
     /* menu tile icon, s x s px at x,y */
     void (*icon)(int x, int y, int s);
 } game_def_t;

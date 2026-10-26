@@ -187,7 +187,7 @@ static game_event_t c4_command(void *st, const char *arg)
     return ev;
 }
 
-/* anywhere in a column drops into it */
+/* anywhere in a column aims at it; the disc drops there on release */
 static int c4_hit(int x, int y)
 {
     (void)y;
@@ -213,9 +213,16 @@ static bool on_win(const c4_t *g, int cell)
     return false;
 }
 
-static void c4_draw(const void *st)
+static void c4_draw(const void *st, int preview)
 {
     const c4_t *g = st;
+    if (preview >= 0 && preview < C4_COLS && g->r.status == GAME_PLAYING) {
+        /* the disc about to drop, in the mover's colour, above its column */
+        float cx, cy;
+        disc_center(C4_ROWS, preview, &cx, &cy);
+        cy -= 3; /* clear of the board frame */
+        gfx_disc(cx, cy, DISC_R, g->r.turn == CELL_X ? COL_X : COL_O);
+    }
     gfx_rrect(C4_X0 - 3, C4_Y0 - 3, C4_COLS * C4_PX + 6, C4_ROWS * C4_PX + 6, 8, COL_LINE);
     bool over = g->r.status != GAME_PLAYING;
     for (int row = 0; row < C4_ROWS; row++) {
@@ -267,6 +274,7 @@ const game_def_t CONNECT4 = {
     .move = c4_move,
     .command = c4_command,
     .hit = c4_hit,
+    .drag = true,
     .draw = c4_draw,
     .icon = c4_icon,
 };

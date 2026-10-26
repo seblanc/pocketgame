@@ -26,6 +26,7 @@ typedef struct {
 typedef struct {
     screen_t screen;
     int game_idx;
+    int preview; /* the move a finger is aiming in a drag game, -1 for none */
     game_slot_t games[GAME_MAX];
     int vol;              /* 0..100, 0 = silent */
     int menu_scroll;      /* list offsets in px (negative or past the end while stretched) */

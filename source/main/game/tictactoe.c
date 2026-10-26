@@ -142,8 +142,9 @@ static void cell_center(int cell, float *cx, float *cy)
     *cy = GRID_Y0 + (cell / 3) * CELL_PX + CELL_PX / 2.0f;
 }
 
-static void ttt_draw(const void *st)
+static void ttt_draw(const void *st, int preview)
 {
+    (void)preview; /* moves on the press: never aims */
     const ttt_t *g = st;
     int grid = 3 * CELL_PX;
     for (int i = 1; i < 3; i++) {

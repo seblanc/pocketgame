@@ -22,12 +22,12 @@ static bool in_rect(rect_t r, int x, int y) { return x >= r.x && y >= r.y && x <
  * drawn at screen y = LIST_Y0 + y - scroll, clipped to LIST_Y0..LIST_Y1. */
 #define LIST_Y1 216 /* the footer hint stays below */
 
-/* home screen: a list of full-width tiles, one per game */
+/* home screen: a list of full-width tiles, one per game, right below the top bar */
 #define MENU_Y0 (BAR_H + 1)
 #define TILE_X 16
-#define TILE_Y0 35
+#define TILE_Y0 10
 #define TILE_W 208
-#define TILE_H 72
+#define TILE_H 80
 #define TILE_GAP 8
 
 /* confirm */
@@ -112,9 +112,7 @@ static void draw_bar(const app_view_t *v)
 static void draw_menu(const app_view_t *v)
 {
     draw_bar(v);
-    int y0 = MENU_Y0 - v->menu_scroll;
     gfx_clip_y(MENU_Y0, LIST_Y1);
-    gfx_text(16, y0 + 11, "GAMES", 1, COL_DIM);
     for (int i = 0; i < GAME_COUNT; i++) {
         rect_t r = at(tile_rect(i), MENU_Y0, v->menu_scroll);
         if (r.y + r.h < MENU_Y0 || r.y >= LIST_Y1) {
@@ -122,7 +120,7 @@ static void draw_menu(const app_view_t *v)
         }
         gfx_rrect(r.x, r.y, r.w, r.h, 12, COL_LINE);
         if (GAMES[i]->icon) {
-            GAMES[i]->icon(r.x + 12, r.y + 12, 48);
+            GAMES[i]->icon(r.x + 12, r.y + (r.h - 48) / 2, 48);
         }
         gfx_text(r.x + 72, r.y + (r.h - 14) / 2, GAMES[i]->title, 2, COL_TEXT);
     }
@@ -135,6 +133,11 @@ static void draw_game(const app_view_t *v)
 {
     const game_slot_t *s = &v->games[v->game_idx];
     const game_round_t *g = game_round(s->st.bytes);
+    if (v->preview >= 0 && g->status == GAME_PLAYING) {
+        /* aiming: the top strip is the game's drop lane */
+        GAMES[v->game_idx]->draw(s->st.bytes, v->preview);
+        return;
+    }
     char buf[16];
     snprintf(buf, sizeof(buf), "X %d", s->wins_x > 99 ? 99 : s->wins_x);
     gfx_text(8, 13, buf, 2, COL_X);
@@ -162,7 +165,7 @@ static void draw_game(const app_view_t *v)
     gfx_rrect(b.x, b.y, b.w, b.h, 4, tc);
     gfx_text_mid(b.x + b.w / 2, b.y + (b.h - 14) / 2, buf, 2, tc);
 
-    GAMES[v->game_idx]->draw(s->st.bytes);
+    GAMES[v->game_idx]->draw(s->st.bytes, -1);
 }
 
 static void draw_confirm(void)
@@ -339,6 +342,10 @@ hit_t ui_hit(const app_view_t *v, int x, int y, int *arg)
             return HIT_NEW_GAME;
         }
         int m = GAMES[v->game_idx]->hit(x, y);
+        if (GAMES[v->game_idx]->drag) {
+            *arg = m;
+            return HIT_AIM;
+        }
         if (m < 0) {
             return HIT_NONE;
         }

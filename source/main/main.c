@@ -107,6 +107,7 @@ static void unlock(void) { xSemaphoreGive(s_lock); }
 static void show_locked(screen_t s)
 {
     s_v.screen = s;
+    s_v.preview = -1;
     if (s == SCR_GAME) {
         out("SCREEN game=%s", GAMES[s_v.game_idx]->id);
     } else {
@@ -556,9 +557,21 @@ static void display_task(void *arg)
     }
 }
 
+/* the move aimed in a drag game (shown as its preview), -1 for none */
+static void set_preview(int m)
+{
+    lock();
+    bool changed = s_v.preview != m;
+    s_v.preview = m;
+    unlock();
+    if (changed) {
+        request_redraw();
+    }
+}
+
 /* Runs what a press does at once. Returns the hit for the touch task to finish: the
- * slider (a drag) and list taps (tiles, SET UP), which act on release unless the finger
- * scrolled the list. */
+ * slider (a drag), aiming in a drag game (moves on release) and list taps (tiles,
+ * SET UP), which act on release unless the finger scrolled the list. */
 static hit_t on_press(int x, int y, int *arg)
 {
     app_view_t v;
@@ -570,6 +583,9 @@ static hit_t on_press(int x, int y, int *arg)
     case HIT_TILE:
     case HIT_WIFI_SETUP:
     case HIT_SLIDER:
+        return h;
+    case HIT_AIM:
+        set_preview(*arg);
         return h;
     case HIT_MOVE:
         app_move(v.game_idx, *arg, "touch");
@@ -590,12 +606,10 @@ static hit_t on_press(int x, int y, int *arg)
     return HIT_NONE;
 }
 
-/* Ticks follow the finger but never closer than TICK_MIN_MS, so a fast drag gives a
- * steady ~11/s instead of a buzz. The slider ticks only when its value changes; the
- * home menu list ticks every SCROLL_STEP_PX of finger travel (the Settings list
- * scrolls silently, so the only sound there is the volume bar's). */
+/* Slider ticks follow the finger but never closer than TICK_MIN_MS, so a fast drag
+ * gives a steady ~11/s instead of a buzz, and only when the value changes. The lists
+ * (home menu, Settings) scroll silently. */
 #define TICK_MIN_MS 90
-#define SCROLL_STEP_PX 12
 #define TAP_SLOP_PX 8   /* more finger travel than this is a scroll, not a tap */
 #define SLIDER_DEAD_PX 2 /* touch jitter on a resting finger does not move the volume */
 #define TOUCH_MS 20
@@ -635,9 +649,10 @@ static void publish_scroll(screen_t s, const scroller_t *sc)
 static void touch_task(void *arg)
 {
     bool was = false, slider = false, moved = false;
+    bool aim = false; /* aiming in a drag game: the move is made on release */
     hit_t pending = HIT_NONE; /* list tap waiting for the release */
     int pending_arg = -1, last_vol = -1, slider_x = 0;
-    int press_x = 0, press_y = 0, tick_y = 0;
+    int press_x = 0, press_y = 0;
     uint32_t last_tick = 0, last_ms = now_ms();
     screen_t shown = SCR_OFF;
     scroller_t *sc = NULL;
@@ -656,6 +671,7 @@ static void touch_task(void *arg)
                 publish_scroll(scr, sc);
             }
             slider = false;
+            aim = false; /* the preview went with the screen change */
             pending = HIT_NONE;
         }
 
@@ -666,9 +682,10 @@ static void touch_task(void *arg)
             bool gliding = sc && scroll_moving(sc); /* a touch on a moving list only stops it */
             moved = false;
             press_x = x;
-            press_y = tick_y = y;
+            press_y = y;
             hit_t h = on_press(x, y, &pending_arg);
             slider = h == HIT_SLIDER;
+            aim = h == HIT_AIM;
             pending = (h == HIT_TILE || h == HIT_WIFI_SETUP) && !gliding ? h : HIT_NONE;
             if (slider) {
                 slider_x = x;
@@ -693,18 +710,32 @@ static void touch_task(void *arg)
                     play_tick(&last_tick);
                 }
             }
+        } else if (down && aim) {
+            lock();
+            int idx = s_v.game_idx;
+            unlock();
+            set_preview(GAMES[idx]->hit(x, y)); /* follows the finger, -1 off the board */
         } else if (down && sc) {
             if (abs(x - press_x) > TAP_SLOP_PX || abs(y - press_y) > TAP_SLOP_PX) {
                 moved = true;
             }
             scroll_drag(sc, y, now);
             publish_scroll(scr, sc);
-            if (scr == SCR_MENU && abs(y - tick_y) >= SCROLL_STEP_PX) {
-                tick_y = y;
-                play_tick(&last_tick);
-            }
         } else if (!down && was) {
-            if (slider) {
+            if (aim) {
+                /* the move under the preview, where the finger left the board */
+                aim = false;
+                lock();
+                int idx = s_v.game_idx, m = s_v.screen == SCR_GAME ? s_v.preview : -1;
+                s_v.preview = -1;
+                unlock();
+                if (m >= 0) {
+                    app_move(idx, m, "touch"); /* a full column is rejected as before */
+                } else {
+                    out("AIM cancelled");
+                }
+                request_redraw(); /* the preview is gone, also after a rejected drop */
+            } else if (slider) {
                 slider = false;
                 app_set_volume(last_vol, true, false); /* save once, on release */
             } else {
@@ -865,6 +896,7 @@ void app_main(void)
     }
     s_v.game_idx = 0;
     s_v.screen = SCR_MENU;
+    s_v.preview = -1;
     strlcpy(s_v.version, esp_app_get_description()->version, sizeof(s_v.version));
     /* keep the console for the protocol (and Wi-Fi logs would print the network name) */
     esp_log_level_set("*", ESP_LOG_WARN);

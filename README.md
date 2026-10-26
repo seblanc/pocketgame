@@ -3,13 +3,16 @@
 A small multi-game handheld for the ESP32-S3-LCD-1.54 touch board (ESP-IDF, `source/`).
 Minimal UI: dark background, thin lines, one accent colour.
 
-- **Home screen:** one touch tile per game (Tic-tac-toe, Connect 4; all games are for 2 players) and a thin top bar with the battery %
+- **Home screen:** no title, one touch tile per game right below the bar (Tic-tac-toe, Connect 4; all games are for 2 players) and a thin top bar with the battery %
   (IO1 / VBAT_ADC, 200k/100k divider) and the Wi-Fi state. The bar only shows outside games.
 - **Games** are self-contained modules in `source/main/game/` (one `.c/.h` per game) behind the common
   interface in `game/game.h` (rules, board drawing, touch mapping, UART command); `GAMES[]` in `main.c`
   lists them as menu tiles. The app frame (scores, turn banner, leave confirmation, sounds, alternating
   starter) is shared.
-- **Connect 4:** 7 columns x 6 rows; tap anywhere in a column to drop a disc to its lowest free cell.
+- **Connect 4:** 7 columns x 6 rows; press-drag-release: touching the board shows a preview disc in the
+  mover's colour above the column under the finger (in place of the banner and scores), it follows the
+  finger, and releasing drops the disc there to the lowest free cell. Releasing off the board
+  (`AIM cancelled`) or on a full column (`ERR full column n`) leaves the turn unchanged.
   Four in a row (horizontal, vertical, diagonal) wins and is highlighted; a full board is a draw.
   Blue X / red O discs and banner, same sounds and rules for starting and leaving as tic-tac-toe.
 - **Tic-tac-toe:** tap a cell to place X or O; after a win or a draw, tap anywhere for a new game.
@@ -20,8 +23,7 @@ Minimal UI: dark background, thin lines, one accent colour.
   release (iOS-style). Menu tiles and the Wi-Fi SET UP button act on a tap (release without scrolling);
   touching a gliding list only stops it.
 - **Touch sound:** a soft, decaying tick. The volume slider ticks only while the finger is on the volume
-  bar and the value changes; the menu list ticks every 12 px of drag. Ticks are at least 90 ms apart, and
-  the Settings list scrolls silently.
+  bar and the value changes, at least 90 ms apart. Both lists (home menu, Settings) scroll silently.
 - **Buttons:** a short press on LEFT goes back (asks to confirm while a game is in progress);
   holding LEFT + RIGHT for 3 s opens Settings. The middle button is only the power key:
   holding it 3 s shows "Powering off" and releases the battery latch (on USB power the board sleeps
