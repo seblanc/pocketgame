@@ -267,12 +267,20 @@ static void draw_update(const app_view_t *v)
             go = "CHECK";
             break;
         case UPD_ERROR:
-            if (strcmp(o->check_err, "not_found") == 0) {
-                /* OTA_NOT_FOUND_TEXT, wrapped to the screen */
-                static const char *const NF[] = {"NO PUBLIC RELEASE FOUND ON", "GITHUB.COM/" GITHUB_REPO,
+            if (strcmp(o->check_err, "repo_private") == 0 || strcmp(o->check_err, "no_release") == 0 ||
+                strcmp(o->check_err, "not_found") == 0) {
+                /* OTA_REPO_PRIVATE_TEXT / OTA_NO_RELEASE_TEXT, wrapped to the screen */
+                static const char *const PRIV[] = {"INTERNET OK, GITHUB REACHED", "GITHUB.COM/" GITHUB_REPO,
+                                                   "IS PRIVATE OR MISSING:", "MAKE THE REPO PUBLIC"};
+                static const char *const NOREL[] = {"INTERNET OK, GITHUB REACHED", "GITHUB.COM/" GITHUB_REPO,
+                                                    "IS PUBLIC BUT HAS", "NO PUBLISHED RELEASE"};
+                static const char *const NF[] = {"INTERNET OK, GITHUB REACHED", "GITHUB.COM/" GITHUB_REPO,
                                                  "(REPO PRIVATE OR", "NO RELEASE PUBLISHED)"};
+                const char *const *t = strcmp(o->check_err, "repo_private") == 0 ? PRIV
+                                       : strcmp(o->check_err, "no_release") == 0 ? NOREL
+                                                                                  : NF;
                 for (int i = 0; i < 4; i++) {
-                    gfx_text_mid(SCREEN_W / 2, 126 + 13 * i, NF[i], 1, COL_O);
+                    gfx_text_mid(SCREEN_W / 2, 126 + 13 * i, t[i], 1, COL_O);
                 }
             } else {
                 snprintf(buf, sizeof(buf), "CHECK FAILED: %s", o->check_err);

@@ -17,6 +17,7 @@
 #include "nostromo_ota.h"
 
 #define RELEASE_URL "https://api.github.com/repos/" GITHUB_REPO "/releases/latest"
+#define REPO_URL "https://api.github.com/repos/" GITHUB_REPO
 #define ASSET_NAME "pocketgame.bin"
 #define URL_MAX 256
 #define HTTP_TIMEOUT_MS 15000
@@ -469,8 +470,10 @@ static void check_done(upd_result_t r, const char *latest, const char *asset_url
     s_v.has_asset = asset_url && asset_url[0];
     strlcpy(s_asset_url, asset_url ? asset_url : "", sizeof(s_asset_url));
     portEXIT_CRITICAL(&s_mux);
-    if (r == UPD_ERROR && strcmp(err, "not_found") == 0) {
-        app_out("UPDATE ERR %s reason=" OTA_NOT_FOUND_TEXT, err);
+    if (r == UPD_ERROR && strcmp(err, "repo_private") == 0) {
+        app_out("UPDATE ERR %s reason=" OTA_REPO_PRIVATE_TEXT, err);
+    } else if (r == UPD_ERROR && strcmp(err, "no_release") == 0) {
+        app_out("UPDATE ERR %s reason=" OTA_NO_RELEASE_TEXT, err);
     } else if (r == UPD_ERROR) {
         app_out("UPDATE ERR %s", err);
     } else {
@@ -527,7 +530,7 @@ static void check_task(void *arg)
         heap_report("connect");
         err = "connect";
     } else if (status == 404) {
-        err = "not_found"; /* no release yet, or the repository is private */
+        err = "not_found"; /* no release yet, or the repository is private: asked below */
     } else if (status == 403 || status == 429) {
         err = "rate_limited";
     } else if (status != 200) {
@@ -555,6 +558,18 @@ static void check_task(void *arg)
     if (c) {
         esp_http_client_close(c);
         esp_http_client_cleanup(c);
+    }
+    if (err && strcmp(err, "not_found") == 0) {
+        /* the releases API says 404 for both; the repository itself only when it is
+         * private (or gone) */
+        esp_http_client_handle_t r = new_client(REPO_URL);
+        int rs = r ? http_open(r, &len) : -1;
+        app_out("UPDATE repo http=%d", rs);
+        err = rs == 404 ? "repo_private" : rs == 200 ? "no_release" : "not_found";
+        if (r) {
+            esp_http_client_close(r);
+            esp_http_client_cleanup(r);
+        }
     }
 
     int latest[4] = {0}, current[4] = {0};
