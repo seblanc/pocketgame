@@ -4,7 +4,7 @@
 typedef enum {
     HIT_NONE,
     HIT_TILE,       /* arg = game index */
-    HIT_CELL,       /* arg = cell 0..8 */
+    HIT_MOVE,       /* arg = the game's move: cell, column... */
     HIT_NEW_GAME,   /* tap anywhere after a finished game */
     HIT_YES,
     HIT_NO,

@@ -3,8 +3,15 @@
 A small multi-game handheld for the ESP32-S3-LCD-1.54 touch board (ESP-IDF, `source/`).
 Minimal UI: dark background, thin lines, one accent colour.
 
-- **Home screen:** one touch tile per game (tic-tac-toe for now) and a thin top bar with the battery %
+- **Home screen:** one touch tile per game (Tic-tac-toe, Connect 4; all games are for 2 players) and a thin top bar with the battery %
   (IO1 / VBAT_ADC, 200k/100k divider) and the Wi-Fi state. The bar only shows outside games.
+- **Games** are self-contained modules in `source/main/game/` (one `.c/.h` per game) behind the common
+  interface in `game/game.h` (rules, board drawing, touch mapping, UART command); `GAMES[]` in `main.c`
+  lists them as menu tiles. The app frame (scores, turn banner, leave confirmation, sounds, alternating
+  starter) is shared.
+- **Connect 4:** 7 columns x 6 rows; tap anywhere in a column to drop a disc to its lowest free cell.
+  Four in a row (horizontal, vertical, diagonal) wins and is highlighted; a full board is a draw.
+  Blue X / red O discs and banner, same sounds and rules for starting and leaving as tic-tac-toe.
 - **Tic-tac-toe:** tap a cell to place X or O; after a win or a draw, tap anywhere for a new game.
   X is blue, O is red: a banner in the player's colour shows who starts ("X STARTS") and whose turn it
   is. The starting player alternates after every finished round (an abandoned round keeps its starter).
@@ -36,14 +43,18 @@ Serial commands (USB-C console, 115200):
 
 | command | reply |
 | --- | --- |
-| `new`, `play <0-8>`, `board` | `READY turn=X\|O` (starter of the new round), `BOARD X.O......`, `TURN O`, `WIN X line=0,1,2`, `DRAW`, `ERR occupied\|game over\|bad cell` |
+| `new`, `board` | new round / board of the game on screen (tic-tac-toe from other screens): `READY turn=X\|O` (starter of the new round), `BOARD ...`, `TURN O` |
+| `play <0-8>` | tic-tac-toe: `BOARD X.O......`, `TURN O`, `WIN X line=0,1,2`, `DRAW`, `ERR occupied\|game over\|bad cell` |
+| `drop <0-6> [<0-6> ...]` | Connect 4, one drop per number: `DROP X col=3 row=0`, `BOARD` + 42 cells (top row first), `TURN O`, `WIN X cells=a,b,c,d`, `DRAW`, `ERR range\|full column n\|game over` |
 | `status` | `STATUS screen=menu game=ttt bat=87 mv=4012 wifi=connected ip=... starter=X vol=70` |
-| `open ttt`, `back`, `yes`, `no`, `settings` | `SCREEN menu\|game=ttt\|confirm\|settings\|wifi`, `MENU games=1` |
+| `open ttt\|c4`, `back`, `yes`, `no`, `settings` | `SCREEN menu\|game=ttt\|game=c4\|confirm\|settings\|wifi`, `MENU games=2` |
 | `vol <0-100>` | `VOL n` (0 = silent) |
 | `wifi scan` | `WIFI scan n=<count>`, then `WIFI ap <i> rssi=.. ch=.. secure=0\|1` per network (names stay off the console) |
 | `wifi ssid` / `wifi pass` | `SSID?` / `PASS?`, then the next line is the value; `WIFI saved`, `WIFI connected ip=...` |
 | `wifi`, `wifi setup`, `wifi stop`, `wifi forget` | Wi-Fi state, setup hotspot on/off, forget the network |
 
-Host test of the rules: `gcc -I source/main tests/test_game.c source/main/game.c -o test_game && ./test_game`
+Host tests of the rules:
+`gcc -DGAME_RULES_ONLY -I source/main tests/test_game.c source/main/game/tictactoe.c -o test_game && ./test_game`,
+`gcc -DGAME_RULES_ONLY -I source/main tests/test_connect4.c source/main/game/connect4.c -o test_c4 && ./test_c4`
 
 Host test of the list scrolling: `gcc -I source/main tests/test_scroll.c source/main/scroll.c -lm -o test_scroll && ./test_scroll`

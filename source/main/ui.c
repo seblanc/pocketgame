@@ -6,17 +6,6 @@
 #include <string.h>
 #include "display.h"
 
-#define COL_BG RGB(8, 10, 14)
-#define COL_LINE RGB(48, 54, 66)
-#define COL_DIM RGB(110, 118, 132)
-#define COL_TEXT RGB(226, 230, 236)
-#define COL_ACCENT RGB(0, 214, 170)
-/* one colour per player: marks, scores and the turn banner */
-#define COL_X RGB(64, 150, 255)
-#define COL_O RGB(255, 72, 72)
-#define COL_X_DIM RGB(20, 46, 82)
-#define COL_O_DIM RGB(84, 24, 24)
-
 static uint16_t player_col(uint8_t mark) { return mark == CELL_X ? COL_X : COL_O; }
 static uint16_t player_dim(uint8_t mark) { return mark == CELL_X ? COL_X_DIM : COL_O_DIM; }
 
@@ -41,16 +30,11 @@ static bool in_rect(rect_t r, int x, int y) { return x >= r.x && y >= r.y && x <
 #define TILE_H 72
 #define TILE_GAP 8
 
-/* tic-tac-toe grid */
-#define GRID_X0 21
-#define GRID_Y0 39
-#define CELL_PX 66
-
 /* confirm */
 static const rect_t BTN_NO = {20, 140, 94, 48};
 static const rect_t BTN_YES = {126, 140, 94, 48};
 
-/* turn banner above the grid */
+/* turn banner above the board, the same for every game */
 static const rect_t BANNER = {56, 5, 128, 28};
 
 /* settings: a list of rows below the title */
@@ -125,21 +109,6 @@ static void draw_bar(const app_view_t *v)
     hline(BAR_H);
 }
 
-static void ttt_icon(int x, int y, int s)
-{
-    float t = s / 3.0f;
-    for (int i = 1; i < 3; i++) {
-        gfx_rect(x + (int)(i * t), y, 1, s, COL_LINE);
-        gfx_rect(x, y + (int)(i * t), s, 1, COL_LINE);
-    }
-    float m = t * 0.25f;
-    gfx_line(x + m, y + m, x + t - m, y + t - m, 1.6f, COL_X);
-    gfx_line(x + m, y + t - m, x + t - m, y + m, 1.6f, COL_X);
-    gfx_ring(x + 1.5f * t, y + 1.5f * t, t * 0.3f, 1.6f, COL_O);
-    gfx_line(x + 2 * t + m, y + 2 * t + m, x + 3 * t - m, y + 3 * t - m, 1.6f, COL_X);
-    gfx_line(x + 2 * t + m, y + 3 * t - m, x + 3 * t - m, y + 2 * t + m, 1.6f, COL_X);
-}
-
 static void draw_menu(const app_view_t *v)
 {
     draw_bar(v);
@@ -152,29 +121,24 @@ static void draw_menu(const app_view_t *v)
             continue;
         }
         gfx_rrect(r.x, r.y, r.w, r.h, 12, COL_LINE);
-        if (strcmp(GAMES[i].id, "ttt") == 0) {
-            ttt_icon(r.x + 12, r.y + 12, 48);
+        if (GAMES[i]->icon) {
+            GAMES[i]->icon(r.x + 12, r.y + 12, 48);
         }
-        gfx_text(r.x + 72, r.y + 22, GAMES[i].title, 2, COL_TEXT);
-        gfx_text(r.x + 72, r.y + 42, GAMES[i].subtitle, 1, COL_DIM);
+        gfx_text(r.x + 72, r.y + (r.h - 14) / 2, GAMES[i]->title, 2, COL_TEXT);
     }
     gfx_clip_y(0, SCREEN_H);
     gfx_text_mid(SCREEN_W / 2, 226, "HOLD L + R FOR SETTINGS", 1, COL_DIM);
 }
 
-static void cell_center(int cell, float *cx, float *cy)
+/* scores and turn banner around the board of the game being played */
+static void draw_game(const app_view_t *v)
 {
-    *cx = GRID_X0 + (cell % 3) * CELL_PX + CELL_PX / 2.0f;
-    *cy = GRID_Y0 + (cell / 3) * CELL_PX + CELL_PX / 2.0f;
-}
-
-static void draw_ttt(const app_view_t *v)
-{
-    const game_t *g = &v->game;
+    const game_slot_t *s = &v->games[v->game_idx];
+    const game_round_t *g = game_round(s->st.bytes);
     char buf[16];
-    snprintf(buf, sizeof(buf), "X %d", v->wins_x > 99 ? 99 : v->wins_x);
+    snprintf(buf, sizeof(buf), "X %d", s->wins_x > 99 ? 99 : s->wins_x);
     gfx_text(8, 13, buf, 2, COL_X);
-    snprintf(buf, sizeof(buf), "O %d", v->wins_o > 99 ? 99 : v->wins_o);
+    snprintf(buf, sizeof(buf), "O %d", s->wins_o > 99 ? 99 : s->wins_o);
     gfx_text_right(232, 13, buf, 2, COL_O);
 
     /* turn banner, filled in the colour of the player it is about */
@@ -198,36 +162,7 @@ static void draw_ttt(const app_view_t *v)
     gfx_rrect(b.x, b.y, b.w, b.h, 4, tc);
     gfx_text_mid(b.x + b.w / 2, b.y + (b.h - 14) / 2, buf, 2, tc);
 
-    int grid = 3 * CELL_PX;
-    for (int i = 1; i < 3; i++) {
-        gfx_rect(GRID_X0 + i * CELL_PX - 1, GRID_Y0 + 6, 2, grid - 12, COL_LINE);
-        gfx_rect(GRID_X0 + 6, GRID_Y0 + i * CELL_PX - 1, grid - 12, 2, COL_LINE);
-    }
-
-    bool over = g->status != GAME_PLAYING;
-    for (int c = 0; c < 9; c++) {
-        float cx, cy;
-        cell_center(c, &cx, &cy);
-        bool on_line = g->status == GAME_WIN &&
-                       (c == g->win_line[0] || c == g->win_line[1] || c == g->win_line[2]);
-        bool dim = over && !on_line;
-        if (g->cells[c] == CELL_X) {
-            uint16_t col = dim ? COL_X_DIM : COL_X;
-            gfx_line(cx - 17, cy - 17, cx + 17, cy + 17, 4, col);
-            gfx_line(cx - 17, cy + 17, cx + 17, cy - 17, 4, col);
-        } else if (g->cells[c] == CELL_O) {
-            gfx_ring(cx, cy, 19, 4, dim ? COL_O_DIM : COL_O);
-        }
-    }
-
-    if (g->status == GAME_WIN) {
-        float ax, ay, bx, by;
-        cell_center(g->win_line[0], &ax, &ay);
-        cell_center(g->win_line[2], &bx, &by);
-        float dx = bx - ax, dy = by - ay, len = sqrtf(dx * dx + dy * dy);
-        float ext = 26 / len;
-        gfx_line(ax - dx * ext, ay - dy * ext, bx + dx * ext, by + dy * ext, 3, COL_TEXT);
-    }
+    GAMES[v->game_idx]->draw(s->st.bytes);
 }
 
 static void draw_confirm(void)
@@ -345,7 +280,7 @@ void ui_render(const app_view_t *v)
         draw_menu(v);
         break;
     case SCR_GAME:
-        draw_ttt(v);
+        draw_game(v);
         break;
     case SCR_CONFIRM:
         draw_confirm();
@@ -400,15 +335,15 @@ hit_t ui_hit(const app_view_t *v, int x, int y, int *arg)
         }
         return HIT_NONE;
     case SCR_GAME: {
-        if (v->game.status != GAME_PLAYING) {
+        if (game_round(v->games[v->game_idx].st.bytes)->status != GAME_PLAYING) {
             return HIT_NEW_GAME;
         }
-        int col = (x - GRID_X0) / CELL_PX, row = (y - GRID_Y0) / CELL_PX;
-        if (x < GRID_X0 || y < GRID_Y0 || col > 2 || row > 2) {
+        int m = GAMES[v->game_idx]->hit(x, y);
+        if (m < 0) {
             return HIT_NONE;
         }
-        *arg = row * 3 + col;
-        return HIT_CELL;
+        *arg = m;
+        return HIT_MOVE;
     }
     case SCR_CONFIRM:
         if (in_rect(BTN_YES, x, y)) {

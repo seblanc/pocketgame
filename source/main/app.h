@@ -1,29 +1,32 @@
 #pragma once
 #include <stdbool.h>
 #include <stddef.h>
-#include "game.h"
+#include "game/game.h"
 #include "net.h"
 
 typedef enum { SCR_MENU, SCR_GAME, SCR_CONFIRM, SCR_SETTINGS, SCR_WIFI, SCR_OFF } screen_t;
 
-/* One entry per game on the home screen. A new game adds an entry here, its
- * tile icon and screen in ui.c, and its actions in main.c. */
-typedef struct {
-    const char *id; /* UART name: "open ttt" */
-    const char *title;
-    const char *subtitle;
-} game_info_t;
-
-extern const game_info_t GAMES[];
+/* One entry per game on the home screen, in menu order (main.c). A new game is a
+ * module in game/ exporting a game_def_t, added to this list. */
+#define GAME_MAX 4
+extern const game_def_t *const GAMES[];
 extern const int GAME_COUNT;
+
+/* one game's state and score, kept while another game or screen is shown */
+typedef struct {
+    union {
+        uint8_t bytes[GAME_STATE_MAX]; /* the game's own state, starting with a game_round_t */
+        uint32_t align;
+    } st;
+    int wins_x, wins_o;
+    uint8_t next_starter; /* who starts the next round: alternates after each finished one */
+} game_slot_t;
 
 /* Everything the screens show; main.c owns it, the display task renders a copy. */
 typedef struct {
     screen_t screen;
     int game_idx;
-    game_t game;
-    int wins_x, wins_o;
-    uint8_t next_starter; /* who starts the next round: alternates after each finished one */
+    game_slot_t games[GAME_MAX];
     int vol;              /* 0..100, 0 = silent */
     int menu_scroll;      /* list offsets in px (negative or past the end while stretched) */
     int settings_scroll;

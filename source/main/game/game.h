@@ -1,0 +1,73 @@
+#pragma once
+#include <stdint.h>
+
+/* The common game interface. Each game is one module in this folder (its rules,
+ * board drawing, touch mapping and UART command) exporting one game_def_t; the app
+ * lists them in GAMES[] (main.c), which gives the home menu its tiles. All games are
+ * two-player, X (blue) against O (red), taking turns on one screen. The app owns
+ * the frame around a game: scores, turn banner, leave confirmation, sounds, and who
+ * starts the next round (alternating after every finished round). */
+
+#define CELL_EMPTY 0
+#define CELL_X 1
+#define CELL_O 2
+
+typedef enum { GAME_PLAYING, GAME_WIN, GAME_DRAW } game_status_t;
+
+/* The first member of every game's state, so the app reads any round the same way. */
+typedef struct {
+    game_status_t status;
+    uint8_t turn;    /* CELL_X or CELL_O: who moves next */
+    uint8_t starter; /* CELL_X or CELL_O: who has the first move of this round */
+    uint8_t winner;  /* valid when status == GAME_WIN */
+    uint8_t moves;
+} game_round_t;
+
+/* what a move did, for the app's sound and bookkeeping */
+typedef enum {
+    GEV_NONE,   /* nothing happened (no sound) */
+    GEV_MOVE_X, /* a move, the round goes on */
+    GEV_MOVE_O,
+    GEV_BAD,    /* rejected: the ERR line is printed, the turn does not change */
+    GEV_WIN,
+    GEV_DRAW,
+} game_event_t;
+
+/* room for one game's state in the app's view (each module checks its size) */
+#define GAME_STATE_MAX 96
+
+typedef struct {
+    const char *id;    /* UART name: "open ttt", "STATUS ... game=ttt" */
+    const char *title; /* menu tile */
+    const char *verb;  /* the game's UART command: "play" */
+    /* empty board, first moves first (round.starter) */
+    void (*new_round)(void *st, uint8_t first);
+    /* prints BOARD ..., then TURN X | WIN X ... | DRAW */
+    void (*print)(const void *st);
+    /* applies one move (cell, column...), prints the result or the ERR line */
+    game_event_t (*move)(void *st, int m, const char *src);
+    /* the verb's argument text from the console; returns the last move's event */
+    game_event_t (*command)(void *st, const char *arg);
+    /* the move for a tap at x,y on a running round, -1 for none */
+    int (*hit)(int x, int y);
+    /* the board, below the turn banner (y >= 36) */
+    void (*draw)(const void *st);
+    /* menu tile icon, s x s px at x,y */
+    void (*icon)(int x, int y, int s);
+} game_def_t;
+
+static inline const game_round_t *game_round(const void *st) { return (const game_round_t *)st; }
+
+/* CELL_X <-> CELL_O */
+static inline uint8_t game_other(uint8_t mark) { return mark == CELL_X ? CELL_O : CELL_X; }
+
+static inline char game_mark_char(uint8_t mark) { return mark == CELL_X ? 'X' : mark == CELL_O ? 'O' : '.'; }
+
+/* resets r for a new round started by first */
+static inline void game_round_start(game_round_t *r, uint8_t first)
+{
+    r->status = GAME_PLAYING;
+    r->turn = r->starter = first == CELL_O ? CELL_O : CELL_X;
+    r->winner = CELL_EMPTY;
+    r->moves = 0;
+}

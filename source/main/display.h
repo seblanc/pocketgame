@@ -7,6 +7,18 @@
 
 #define RGB(r, g, b) ((uint16_t)((((r) & 0xF8) << 8) | (((g) & 0xFC) << 3) | ((b) >> 3)))
 
+/* the palette: dark background, 1-2 px lines, one accent colour */
+#define COL_BG RGB(8, 10, 14)
+#define COL_LINE RGB(48, 54, 66)
+#define COL_DIM RGB(110, 118, 132)
+#define COL_TEXT RGB(226, 230, 236)
+#define COL_ACCENT RGB(0, 214, 170)
+/* one colour per player: marks, discs, scores and the turn banner */
+#define COL_X RGB(64, 150, 255)
+#define COL_O RGB(255, 72, 72)
+#define COL_X_DIM RGB(20, 46, 82)
+#define COL_O_DIM RGB(84, 24, 24)
+
 /* Starts the ST7789 panel, clears it and switches the backlight on. */
 esp_err_t display_init(void);
 /* Sends the frame buffer to the panel; drawing goes to the buffer only. */

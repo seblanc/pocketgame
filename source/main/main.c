@@ -1,18 +1,21 @@
 /* PocketGame: a small multi-game handheld on the ESP32-S3-LCD-1.54 touch board.
  *
  * Screens: home menu (one tile per game, top bar with battery % and Wi-Fi), the
- * games (tic-tac-toe for now), a leave-game confirmation, Settings (volume, where 0
- * is silent, and Wi-Fi) and the Wi-Fi setup hotspot screen.
+ * games (tic-tac-toe and Connect 4, modules in game/), a leave-game confirmation,
+ * Settings (volume, where 0 is silent, and Wi-Fi) and the Wi-Fi setup hotspot screen.
  *
  * Buttons: a short press on LEFT goes back (asking first while a game is running);
  * holding LEFT + RIGHT for 3 s opens Settings. The middle button is only the power
  * key: holding it 3 s powers the board off (or sleeps it on USB).
  *
  * Serial protocol (USB Serial/JTAG console, one command per line):
- *   new | play <0-8> | board   tic-tac-toe, as before (switches to the game screen):
- *                              READY turn=X (who starts: alternates after each finished
- *                              round), BOARD ........., TURN O | WIN X line=a,b,c | DRAW,
+ *   new | board                a new round / the board of the game on screen (tic-tac-toe
+ *                              from the other screens): READY turn=X (who starts:
+ *                              alternates after each finished round), BOARD ..., TURN O
+ *   play <0-8>                 tic-tac-toe (switches to it): WIN X line=a,b,c | DRAW,
  *                              ERR occupied | ERR game over | ERR bad cell
+ *   drop <0-6> [<0-6> ...]     Connect 4 (switches to it): WIN X cells=a,b,c,d | DRAW,
+ *                              ERR range | ERR full column n | ERR game over
  *   status                     STATUS screen=menu bat=.. mv=.. wifi=.. ip=.. starter=X vol=..
  *   open <id> | back | yes | no | settings      navigation, replies SCREEN ...
  *   vol <0-100>                                 VOL n (saved in NVS, 0 = silent)
@@ -39,7 +42,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
-#include "game.h"
+#include "game/connect4.h"
+#include "game/tictactoe.h"
 #include "hal/usb_serial_jtag_ll.h"
 #include "i2cbus.h"
 #include "net.h"
@@ -55,10 +59,10 @@
 #define HEARTBEAT_S 10
 #define BATTERY_S 20
 
-const game_info_t GAMES[] = {
-    {"ttt", "TIC-TAC-TOE", "2 PLAYERS"},
-};
+/* the home menu tiles, in order; the first one is the default game */
+const game_def_t *const GAMES[] = {&TICTACTOE, &CONNECT4};
 const int GAME_COUNT = sizeof(GAMES) / sizeof(GAMES[0]);
+_Static_assert(sizeof(GAMES) / sizeof(GAMES[0]) <= GAME_MAX, "raise GAME_MAX");
 
 static const char *const SCREEN_NAMES[] = {"menu", "game", "confirm", "settings", "wifi", "off"};
 
@@ -104,7 +108,7 @@ static void show_locked(screen_t s)
 {
     s_v.screen = s;
     if (s == SCR_GAME) {
-        out("SCREEN game=%s", GAMES[s_v.game_idx].id);
+        out("SCREEN game=%s", GAMES[s_v.game_idx]->id);
     } else {
         out("SCREEN %s", SCREEN_NAMES[s]);
     }
@@ -114,44 +118,31 @@ static void show_locked(screen_t s)
     request_redraw();
 }
 
-static bool game_running_locked(void) { return s_v.game.status == GAME_PLAYING && s_v.game.moves > 0; }
+/* the game shown (or last shown) and its state */
+static game_slot_t *slot_locked(void) { return &s_v.games[s_v.game_idx]; }
+static const game_round_t *round_locked(void) { return game_round(slot_locked()->st.bytes); }
 
-/* the tic-tac-toe commands work from any screen and bring the game up */
-static void ensure_game_locked(void)
+static bool game_running_locked(void) { return round_locked()->status == GAME_PLAYING && round_locked()->moves > 0; }
+
+/* a game's commands work from any screen and bring that game up */
+static void ensure_game_locked(int idx)
 {
-    if (s_v.screen != SCR_GAME) {
-        s_v.game_idx = 0;
+    if (s_v.screen != SCR_GAME || s_v.game_idx != idx) {
+        s_v.game_idx = idx;
         show_locked(SCR_GAME);
     }
 }
 
-static void print_board_locked(void)
-{
-    char b[10];
-    game_board_str(&s_v.game, b);
-    out("BOARD %s", b);
-}
-
-static void print_state_locked(void)
-{
-    const game_t *g = &s_v.game;
-    if (g->status == GAME_WIN) {
-        out("WIN %c line=%d,%d,%d", game_mark_char(g->winner), g->win_line[0], g->win_line[1], g->win_line[2]);
-    } else if (g->status == GAME_DRAW) {
-        out("DRAW");
-    } else {
-        out("TURN %c", game_mark_char(g->turn));
-    }
-}
+static void print_board_locked(void) { GAMES[s_v.game_idx]->print(slot_locked()->st.bytes); }
 
 /* a fresh board; the starter alternates after every finished round (an abandoned
  * round is replayed by the same starter) */
 static void new_round_locked(void)
 {
-    game_start(&s_v.game, s_v.next_starter);
+    GAMES[s_v.game_idx]->new_round(slot_locked()->st.bytes, slot_locked()->next_starter);
 }
 
-static void print_ready_locked(void) { out("READY turn=%c", game_mark_char(s_v.game.starter)); }
+static void print_ready_locked(void) { out("READY turn=%c", game_mark_char(round_locked()->starter)); }
 
 static void app_open_game(int idx, const char *src)
 {
@@ -162,7 +153,7 @@ static void app_open_game(int idx, const char *src)
         return;
     }
     s_v.game_idx = idx;
-    bool fresh = s_v.game.status != GAME_PLAYING;
+    bool fresh = round_locked()->status != GAME_PLAYING;
     if (fresh) {
         new_round_locked();
     }
@@ -171,69 +162,76 @@ static void app_open_game(int idx, const char *src)
         print_ready_locked();
     }
     print_board_locked();
-    print_state_locked();
     unlock();
     sound_play(SND_TICK);
 }
 
+/* new: the game on screen (or behind the leave confirmation), else the first game */
 static void app_new_game(const char *src)
 {
     lock();
-    ensure_game_locked();
+    ensure_game_locked(s_v.screen == SCR_GAME || s_v.screen == SCR_CONFIRM ? s_v.game_idx : 0);
     new_round_locked();
     out("NEW src=%s", src);
     print_ready_locked();
     print_board_locked();
-    print_state_locked();
     unlock();
     sound_play(SND_NEW);
     request_redraw();
 }
 
-static void app_play(int cell, const char *src)
+/* after a move: a finished round is scored and the other player starts the next one */
+static void moved_locked(game_event_t ev)
 {
-    lock();
-    ensure_game_locked();
-    game_t *g = &s_v.game;
-    uint8_t mover = g->turn;
-    move_result_t r = game_play(g, cell);
-    sound_t snd = SND_BAD;
-    switch (r) {
-    case MOVE_ERR_RANGE:
-        out("ERR bad cell");
-        break;
-    case MOVE_ERR_OCCUPIED:
-        out("ERR occupied");
-        break;
-    case MOVE_ERR_OVER:
-        out("ERR game over");
-        break;
-    case MOVE_OK:
-        out("MOVE %c %d src=%s", game_mark_char(mover), cell, src);
-        print_board_locked();
-        print_state_locked();
-        if (g->status != GAME_PLAYING) {
-            s_v.next_starter = game_other(g->starter);
-        }
-        if (g->status == GAME_WIN) {
-            if (g->winner == CELL_X) {
-                s_v.wins_x++;
-            } else {
-                s_v.wins_o++;
-            }
-            snd = SND_WIN;
-        } else if (g->status == GAME_DRAW) {
-            snd = SND_DRAW;
-        } else {
-            snd = mover == CELL_X ? SND_X : SND_O;
-        }
-        break;
+    game_slot_t *s = slot_locked();
+    const game_round_t *r = round_locked();
+    if (ev == GEV_WIN || ev == GEV_DRAW) {
+        s->next_starter = game_other(r->starter);
     }
-    unlock();
-    sound_play(snd);
-    if (r == MOVE_OK) {
+    if (ev == GEV_WIN) {
+        if (r->winner == CELL_X) {
+            s->wins_x++;
+        } else {
+            s->wins_o++;
+        }
+    }
+}
+
+static void play_event(game_event_t ev)
+{
+    static const sound_t SOUNDS[] = {
+        [GEV_MOVE_X] = SND_X, [GEV_MOVE_O] = SND_O, [GEV_BAD] = SND_BAD,
+        [GEV_WIN] = SND_WIN,  [GEV_DRAW] = SND_DRAW,
+    };
+    if (ev != GEV_NONE) {
+        sound_play(SOUNDS[ev]);
+    }
+    if (ev != GEV_NONE && ev != GEV_BAD) {
         request_redraw();
     }
+}
+
+/* one move (a tap) in game idx */
+static void app_move(int idx, int m, const char *src)
+{
+    lock();
+    ensure_game_locked(idx);
+    game_event_t ev = GAMES[idx]->move(slot_locked()->st.bytes, m, src);
+    moved_locked(ev);
+    unlock();
+    play_event(ev);
+}
+
+/* the console command of game idx (its verb) with its arguments */
+static void app_game_command(int idx, const char *arg)
+{
+    lock();
+    ensure_game_locked(idx);
+    game_event_t ev = GAMES[idx]->command(slot_locked()->st.bytes, arg);
+    moved_locked(ev);
+    unlock();
+    play_event(ev);
+    request_redraw(); /* a list of moves may end in a rejected one */
 }
 
 static void app_back(const char *src)
@@ -343,8 +341,8 @@ static void print_status(void)
     app_view_t v;
     snapshot(&v);
     out("STATUS screen=%s game=%s bat=%d mv=%d wifi=%s ip=%s starter=%c vol=%d", SCREEN_NAMES[v.screen],
-        GAMES[v.game_idx].id, v.bat_pct, v.bat_mv, net_state_name(v.wifi), v.ip[0] ? v.ip : "-",
-        game_mark_char(v.game.starter), v.vol);
+        GAMES[v.game_idx]->id, v.bat_pct, v.bat_mv, net_state_name(v.wifi), v.ip[0] ? v.ip : "-",
+        game_mark_char(game_round(v.games[v.game_idx].st.bytes)->starter), v.vol);
 }
 
 void app_status_json(char *buf, size_t n)
@@ -461,26 +459,20 @@ static void handle_line(char *line)
 
     if (strcmp(line, "new") == 0) {
         app_new_game("uart");
-    } else if (strcmp(line, "play") == 0) {
-        char *end;
-        long cell = strtol(arg, &end, 10);
-        if (end == arg) {
-            out("ERR bad cell");
-        } else {
-            app_play((int)cell, "uart");
-        }
     } else if (strcmp(line, "board") == 0) {
         lock();
+        if (s_v.screen != SCR_GAME && s_v.screen != SCR_CONFIRM) {
+            s_v.game_idx = 0;
+        }
         print_board_locked();
-        print_state_locked();
-        out("SCORE X=%d O=%d", s_v.wins_x, s_v.wins_o);
+        out("SCORE X=%d O=%d", slot_locked()->wins_x, slot_locked()->wins_o);
         unlock();
     } else if (strcmp(line, "status") == 0) {
         print_status();
     } else if (strcmp(line, "open") == 0) {
         int idx = -1;
         for (int i = 0; i < GAME_COUNT; i++) {
-            if (strcmp(arg, GAMES[i].id) == 0) {
+            if (strcmp(arg, GAMES[i]->id) == 0) {
                 idx = i;
             }
         }
@@ -502,8 +494,14 @@ static void handle_line(char *line)
     } else if (strcmp(line, "wifi") == 0) {
         handle_wifi(arg);
     } else {
-        out("ERR unknown command (new | play <0-8> | board | status | open ttt | back | yes | no | settings | "
-            "vol <0-100> | wifi ...)");
+        for (int i = 0; i < GAME_COUNT; i++) {
+            if (strcmp(line, GAMES[i]->verb) == 0) {
+                app_game_command(i, arg);
+                return;
+            }
+        }
+        out("ERR unknown command (new | play <0-8> | drop <0-6> ... | board | status | open ttt|c4 | back | "
+            "yes | no | settings | vol <0-100> | wifi ...)");
     }
 }
 
@@ -573,8 +571,8 @@ static hit_t on_press(int x, int y, int *arg)
     case HIT_WIFI_SETUP:
     case HIT_SLIDER:
         return h;
-    case HIT_CELL:
-        app_play(*arg, "touch");
+    case HIT_MOVE:
+        app_move(v.game_idx, *arg, "touch");
         break;
     case HIT_NEW_GAME:
         app_new_game("touch");
@@ -859,8 +857,13 @@ void app_main(void)
     rtc_gpio_deinit(KEY_PWR);
 
     s_lock = xSemaphoreCreateMutex();
-    s_v.next_starter = CELL_X;
-    new_round_locked(); /* no other task runs yet */
+    /* no other task runs yet: every game gets its first round, X starting */
+    for (int i = 0; i < GAME_COUNT; i++) {
+        s_v.game_idx = i;
+        slot_locked()->next_starter = CELL_X;
+        new_round_locked();
+    }
+    s_v.game_idx = 0;
     s_v.screen = SCR_MENU;
     strlcpy(s_v.version, esp_app_get_description()->version, sizeof(s_v.version));
     /* keep the console for the protocol (and Wi-Fi logs would print the network name) */
