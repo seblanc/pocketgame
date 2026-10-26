@@ -1,0 +1,96 @@
+name: Release image
+# Rebuild a published release's firmware at its tag with FW_VERSION = the tag (e.g. v1.1.0)
+# and attach it as pocketgame.bin, replacing any asset of that name. The board's
+# "Check for updates" downloads this file, so a board updated from it reports fw=<tag>;
+# the NOSTROMO test build keeps the default version from source/CMakeLists.txt.
+# Runs when a release is published, by hand for a given tag, and once on main when this
+# workflow changes (then for the latest release, e.g. one published before it existed).
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to rebuild and attach pocketgame.bin to (e.g. v1.1.0)
+        required: true
+        type: string
+  push:
+    branches: [main]
+    paths: ['.github/workflows/release-image.yml']
+permissions:
+  contents: write
+concurrency:
+  group: release-image
+  cancel-in-progress: false
+jobs:
+  resolve:
+    runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - name: Pick the release tag
+        id: tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ -z "$TAG" ]; then
+            TAG=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName 2>/dev/null || true)
+          fi
+          [ -n "$TAG" ] || { echo "No published release: nothing to rebuild"; }
+          [ -z "$TAG" ] || [[ "$TAG" =~ ^v[0-9]+\.[0-9]+ ]] || { echo "Tag $TAG is not vMAJOR.MINOR..."; exit 2; }
+          echo "Release tag: ${TAG:-none}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+  build:
+    needs: resolve
+    if: needs.resolve.outputs.tag != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    container:
+      image: espressif/idf:v5.4.2
+    env:
+      TAG: ${{ needs.resolve.outputs.tag }}
+    steps:
+      - name: Checkout the release tag
+        uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ needs.resolve.outputs.tag }}
+          persist-credentials: false
+      - name: Build with the release version
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          sed -i -E "s/^set\(POCKETGAME_FW_VERSION \"[^\"]*\"\)/set(POCKETGAME_FW_VERSION \"$TAG\")/" source/CMakeLists.txt
+          grep -q "^set(POCKETGAME_FW_VERSION \"$TAG\")" source/CMakeLists.txt || { echo "version line not found"; exit 2; }
+          echo "$TAG" > source/version.txt
+          . /opt/esp/idf/export.sh >/dev/null
+          idf.py -C source set-target esp32s3 build
+          mkdir -p out
+          cp source/build/pocketgame.bin out/pocketgame.bin
+          # The user agent "pocketgame/<FW_VERSION>" is compiled in: prove the image carries the tag.
+          grep -a -q "pocketgame/$TAG" out/pocketgame.bin || { echo "image does not carry $TAG"; exit 3; }
+          (cd out && sha256sum pocketgame.bin)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-image
+          path: out/
+          if-no-files-found: error
+          retention-days: 7
+  attach:
+    needs: [resolve, build]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-image
+          path: out
+      - name: Attach pocketgame.bin to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.resolve.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh release upload "$TAG" out/pocketgame.bin --clobber --repo "$GITHUB_REPOSITORY"
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[] | "\(.name) \(.size)"'

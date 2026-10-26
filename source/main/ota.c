@@ -435,10 +435,14 @@ static bool ends_with(const char *s, const char *tail)
     return a >= b && strcmp(s + a - b, tail) == 0;
 }
 
-/* "v1.2-2026-11" -> 1, 2, 2026, 11 (missing parts 0); false if there is no MAJOR.MINOR */
-static bool parse_version(const char *s, int v[4])
+#define VER_PARTS 5
+
+/* vMAJOR.MINOR[.PATCH][-YYYY-MM] -> major, minor, patch, year, month (missing parts 0):
+ * "v1.1.0" -> 1,1,0,0,0 and "v1.0-2026-10" -> 1,0,0,2026,10, so v1.1.0 is newer.
+ * False if there is no MAJOR.MINOR. */
+static bool parse_version(const char *s, int v[VER_PARTS])
 {
-    memset(v, 0, 4 * sizeof(int));
+    memset(v, 0, VER_PARTS * sizeof(int));
     if (*s == 'v' || *s == 'V') {
         s++;
     }
@@ -446,13 +450,17 @@ static bool parse_version(const char *s, int v[4])
     if (sscanf(s, "%d.%d%n", &v[0], &v[1], &n) != 2) {
         return false;
     }
-    sscanf(s + n, "-%d-%d", &v[2], &v[3]);
+    s += n;
+    if (*s == '.' && sscanf(s, ".%d%n", &v[2], &n) == 1) {
+        s += n;
+    }
+    sscanf(s, "-%d-%d", &v[3], &v[4]);
     return true;
 }
 
-static int compare_versions(const int a[4], const int b[4])
+static int compare_versions(const int a[VER_PARTS], const int b[VER_PARTS])
 {
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < VER_PARTS; i++) {
         if (a[i] != b[i]) {
             return a[i] < b[i] ? -1 : 1;
         }
@@ -572,7 +580,7 @@ static void check_task(void *arg)
         }
     }
 
-    int latest[4] = {0}, current[4] = {0};
+    int latest[VER_PARTS] = {0}, current[VER_PARTS] = {0};
     if (!err && !tag[0]) {
         err = "bad_reply";
     } else if (!err && !parse_version(tag, latest)) {
