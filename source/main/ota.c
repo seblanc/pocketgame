@@ -469,7 +469,9 @@ static void check_done(upd_result_t r, const char *latest, const char *asset_url
     s_v.has_asset = asset_url && asset_url[0];
     strlcpy(s_asset_url, asset_url ? asset_url : "", sizeof(s_asset_url));
     portEXIT_CRITICAL(&s_mux);
-    if (r == UPD_ERROR) {
+    if (r == UPD_ERROR && strcmp(err, "not_found") == 0) {
+        app_out("UPDATE ERR %s reason=" OTA_NOT_FOUND_TEXT, err);
+    } else if (r == UPD_ERROR) {
         app_out("UPDATE ERR %s", err);
     } else {
         app_out("UPDATE result=%s latest=%s current=%s asset=%s", result_name(r), latest, FW_VERSION,

@@ -267,9 +267,18 @@ static void draw_update(const app_view_t *v)
             go = "CHECK";
             break;
         case UPD_ERROR:
-            snprintf(buf, sizeof(buf), "CHECK FAILED: %s", o->check_err);
-            msg = buf;
-            c = COL_O;
+            if (strcmp(o->check_err, "not_found") == 0) {
+                /* OTA_NOT_FOUND_TEXT, wrapped to the screen */
+                static const char *const NF[] = {"NO PUBLIC RELEASE FOUND ON", "GITHUB.COM/" GITHUB_REPO,
+                                                 "(REPO PRIVATE OR", "NO RELEASE PUBLISHED)"};
+                for (int i = 0; i < 4; i++) {
+                    gfx_text_mid(SCREEN_W / 2, 126 + 13 * i, NF[i], 1, COL_O);
+                }
+            } else {
+                snprintf(buf, sizeof(buf), "CHECK FAILED: %s", o->check_err);
+                msg = buf;
+                c = COL_O;
+            }
             go = "RETRY";
             break;
         case UPD_NONE:

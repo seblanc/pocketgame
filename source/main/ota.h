@@ -18,10 +18,13 @@
  * results go to the console:
  *   OTA start url=.. src=.. | OTA progress pct=n bytes=n | OTA done slot=.. bytes=n
  *   OTA FAIL reason=<word> | UPDATE check repo=.. | UPDATE result=newer|same|older
- *   latest=<tag> current=<fw> asset=yes|no | UPDATE ERR <word>
+ *   latest=<tag> current=<fw> asset=yes|no | UPDATE ERR <word> [reason=<text>]
  * NOSTROMO's own contract (/nostromo/version, /nostromo/ota) is registered next to these. */
 
 #define GITHUB_REPO "seblanc/pocketgame"
+/* what a 404 from the releases API means, on UART and on the update screen */
+#define OTA_NOT_FOUND_TEXT \
+    "No public release found on github.com/" GITHUB_REPO " (repo private or no release published)"
 
 typedef enum { OTA_IDLE, OTA_CHECKING, OTA_DOWNLOADING, OTA_REBOOTING, OTA_FAILED } ota_state_t;
 typedef enum { UPD_NONE, UPD_NEWER, UPD_SAME, UPD_OLDER, UPD_ERROR } upd_result_t;
