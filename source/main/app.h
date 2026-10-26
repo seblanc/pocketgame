@@ -35,8 +35,13 @@ typedef struct {
     wifi_state_t wifi;
     char ip[16];
     char ap_name[24];
-    char version[33];
+    char version[33]; /* build id (commit) from the app description */
 } app_view_t;
+
+/* human-readable firmware version, defined once in source/CMakeLists.txt */
+#ifndef FW_VERSION
+#error "FW_VERSION must be defined by the build (source/CMakeLists.txt)"
+#endif
 
 /* one console line, written in one piece so tasks do not interleave */
 void app_out(const char *fmt, ...) __attribute__((format(printf, 1, 2)));

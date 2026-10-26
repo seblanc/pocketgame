@@ -43,7 +43,7 @@ static const rect_t BANNER = {56, 5, 128, 28};
 #define ROW_WIFI 72
 #define ROW_KEYS 156
 #define ROW_ABOUT 236
-#define SET_H 284
+#define SET_H 290
 #define SL_X0 24
 #define SL_X1 216
 #define SL_Y (ROW_VOL + 48)
@@ -73,6 +73,25 @@ static void title(const char *s)
 {
     gfx_text(16, 14, s, 2, COL_TEXT);
     hline(40);
+}
+
+/* a version string like "v1.0-2026-10": the font is upper case only, so the leading
+ * small "v" is drawn here (5x7 cell, x-height rows 2..6) */
+static void version_text(int x, int y, const char *s, int scale, uint16_t c)
+{
+    if (*s == 'v') {
+        static const uint8_t SMALL_V[5] = {0x1C, 0x20, 0x40, 0x20, 0x1C};
+        for (int col = 0; col < 5; col++) {
+            for (int row = 0; row < 7; row++) {
+                if (SMALL_V[col] & (1 << row)) {
+                    gfx_rect(x + col * scale, y + row * scale, scale, scale, c);
+                }
+            }
+        }
+        x += 6 * scale;
+        s++;
+    }
+    gfx_text(x, y, s, scale, c);
 }
 
 static void wifi_icon(float x, float y, wifi_state_t st)
@@ -229,8 +248,7 @@ static void draw_settings(const app_view_t *v)
     gfx_rect(0, y0 + ROW_ABOUT - 1, SCREEN_W, 1, COL_LINE);
 
     gfx_text(16, y0 + ROW_ABOUT + 12, "VERSION", 1, COL_DIM);
-    snprintf(buf, sizeof(buf), "%.32s", v->version);
-    gfx_text(16, y0 + ROW_ABOUT + 26, buf, 1, COL_TEXT);
+    version_text(16, y0 + ROW_ABOUT + 26, FW_VERSION, 2, COL_TEXT);
 
     gfx_clip_y(0, SCREEN_H);
     gfx_text_right(224, 226, "LEFT = BACK", 1, COL_DIM);

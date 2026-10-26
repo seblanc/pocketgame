@@ -16,7 +16,7 @@
  *                              ERR occupied | ERR game over | ERR bad cell
  *   drop <0-6> [<0-6> ...]     Connect 4 (switches to it): WIN X cells=a,b,c,d | DRAW,
  *                              ERR range | ERR full column n | ERR game over
- *   status                     STATUS screen=menu bat=.. mv=.. wifi=.. ip=.. starter=X vol=..
+ *   status                     STATUS screen=menu bat=.. mv=.. wifi=.. ip=.. starter=X vol=.. fw=v..
  *   open <id> | back | yes | no | settings      navigation, replies SCREEN ...
  *   vol <0-100>                                 VOL n (saved in NVS, 0 = silent)
  *   wifi [ssid | pass | scan | setup | stop | forget]  ssid/pass ask SSID? / PASS? and
@@ -341,9 +341,9 @@ static void print_status(void)
 {
     app_view_t v;
     snapshot(&v);
-    out("STATUS screen=%s game=%s bat=%d mv=%d wifi=%s ip=%s starter=%c vol=%d", SCREEN_NAMES[v.screen],
+    out("STATUS screen=%s game=%s bat=%d mv=%d wifi=%s ip=%s starter=%c vol=%d fw=%s", SCREEN_NAMES[v.screen],
         GAMES[v.game_idx]->id, v.bat_pct, v.bat_mv, net_state_name(v.wifi), v.ip[0] ? v.ip : "-",
-        game_mark_char(game_round(v.games[v.game_idx].st.bytes)->starter), v.vol);
+        game_mark_char(game_round(v.games[v.game_idx].st.bytes)->starter), v.vol, FW_VERSION);
 }
 
 void app_status_json(char *buf, size_t n)
@@ -351,9 +351,9 @@ void app_status_json(char *buf, size_t n)
     app_view_t v;
     snapshot(&v);
     snprintf(buf, n,
-             "{\"app\":\"pocketgame\",\"version\":\"%s\",\"screen\":\"%s\",\"games\":%d,"
+             "{\"app\":\"pocketgame\",\"fw\":\"%s\",\"version\":\"%s\",\"screen\":\"%s\",\"games\":%d,"
              "\"battery\":{\"mv\":%d,\"pct\":%d},\"wifi\":\"%s\",\"ip\":\"%s\",\"vol\":%d}",
-             v.version, SCREEN_NAMES[v.screen], GAME_COUNT, v.bat_mv, v.bat_pct, net_state_name(v.wifi), v.ip,
+             FW_VERSION, v.version, SCREEN_NAMES[v.screen], GAME_COUNT, v.bat_mv, v.bat_pct, net_state_name(v.wifi), v.ip,
              v.vol);
 }
 
@@ -903,7 +903,7 @@ void app_main(void)
 
     /* give the host time to reopen the USB serial port after a reset */
     vTaskDelay(pdMS_TO_TICKS(1500));
-    out("POCKETGAME BOOT board=ESP32-S3-LCD-1.54 version=%s", s_v.version);
+    out("POCKETGAME BOOT board=ESP32-S3-LCD-1.54 fw=%s build=%s", FW_VERSION, s_v.version);
 
     esp_err_t err = display_init();
     if (err == ESP_OK) {
