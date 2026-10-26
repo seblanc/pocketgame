@@ -7,6 +7,7 @@
 #include "esp_app_desc.h"
 #include "esp_app_format.h"
 #include "esp_crt_bundle.h"
+#include "esp_heap_caps.h"
 #include "esp_http_client.h"
 #include "esp_ota_ops.h"
 #include "esp_system.h"
@@ -21,7 +22,9 @@
 #define HTTP_TIMEOUT_MS 15000
 #define MAX_REDIRECTS 6
 #define CHUNK 4096
-#define REPLY_MAX (32 * 1024) /* the release JSON (assets come before the notes) */
+#define REPLY_MAX (256 * 1024) /* read at most this much of the release JSON */
+#define WIN_LEN 2048           /* the release JSON is scanned through this window */
+#define WIN_KEEP 512           /* longer than any "key":"value" pair it looks for */
 /* the start of an image: header, first segment header, then the app description */
 #define HEAD_LEN (sizeof(esp_image_header_t) + sizeof(esp_image_segment_header_t) + sizeof(esp_app_desc_t))
 
@@ -475,21 +478,51 @@ static void check_done(upd_result_t r, const char *latest, const char *asset_url
     app_ota_changed();
 }
 
+/* scans win for the tag and the firmware URL (keeps the first tag; pocketgame.bin wins
+ * over the first .bin); true once both are final */
+static bool scan_release(const char *win, char *tag, size_t tag_n, char *best, size_t best_n)
+{
+    char url[URL_MAX];
+    if (!tag[0]) {
+        json_str(win, "tag_name", tag, tag_n);
+    }
+    for (const char *p = win; (p = json_str(p, "browser_download_url", url, sizeof(url))) != NULL;) {
+        if (ends_with(url, "/" ASSET_NAME)) {
+            strlcpy(best, url, best_n);
+            break;
+        }
+        if (!best[0] && ends_with(url, ".bin")) {
+            strlcpy(best, url, best_n);
+        }
+    }
+    return tag[0] && ends_with(best, "/" ASSET_NAME);
+}
+
+static void heap_report(const char *what)
+{
+    app_out("UPDATE heap %s free=%u largest=%u", what, (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+            (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+}
+
 static void check_task(void *arg)
 {
-    char *reply = malloc(REPLY_MAX + 1);
-    char why[24], tag[24], url[URL_MAX], best[URL_MAX] = "";
+    /* the release JSON is streamed through a small window: the internal RAM left next
+     * to Wi-Fi and the frame buffer has no room for the whole reply plus TLS */
+    char *win = malloc(WIN_LEN + 1);
+    char why[24], tag[24] = "", best[URL_MAX] = "";
     const char *err = NULL;
-    int len = 0, got = 0;
+    int len = 0;
 
-    esp_http_client_handle_t c = reply ? new_client(RELEASE_URL) : NULL;
+    esp_http_client_handle_t c = win ? new_client(RELEASE_URL) : NULL;
     if (c) {
         esp_http_client_set_header(c, "Accept", "application/vnd.github+json");
     }
     int status = c ? http_open(c, &len) : -1;
-    if (!reply || !c) {
+    if (!win || !c) {
+        heap_report(!win ? "buffer" : "client");
         err = "no_memory";
     } else if (status < 0) {
+        heap_report("connect");
         err = "connect";
     } else if (status == 404) {
         err = "not_found"; /* no release yet, or the repository is private */
@@ -499,11 +532,23 @@ static void check_task(void *arg)
         snprintf(why, sizeof(why), "http_%d", status);
         err = why;
     } else {
-        int n;
-        while (got < REPLY_MAX && (n = esp_http_client_read(c, reply + got, REPLY_MAX - got)) > 0) {
-            got += n;
+        int have = 0, total = 0, n = 0;
+        while (total < REPLY_MAX && (n = esp_http_client_read(c, win + have, WIN_LEN - have)) > 0) {
+            have += n;
+            total += n;
+            win[have] = '\0';
+            if (scan_release(win, tag, sizeof(tag), best, sizeof(best))) {
+                break;
+            }
+            /* keep the tail: a "key":"value" pair cut at the window's end is whole next time */
+            if (have > WIN_KEEP) {
+                memmove(win, win + have - WIN_KEEP, WIN_KEEP);
+                have = WIN_KEEP;
+            }
         }
-        reply[got] = '\0';
+        if (n < 0 && !tag[0]) {
+            err = "read";
+        }
     }
     if (c) {
         esp_http_client_close(c);
@@ -511,29 +556,19 @@ static void check_task(void *arg)
     }
 
     int latest[4] = {0}, current[4] = {0};
-    if (!err && !json_str(reply, "tag_name", tag, sizeof(tag))) {
+    if (!err && !tag[0]) {
         err = "bad_reply";
     } else if (!err && !parse_version(tag, latest)) {
         err = "bad_tag";
     }
     if (!err) {
-        /* the firmware file: pocketgame.bin, else the first .bin */
-        for (const char *p = reply; (p = json_str(p, "browser_download_url", url, sizeof(url))) != NULL;) {
-            if (ends_with(url, "/" ASSET_NAME)) {
-                strlcpy(best, url, sizeof(best));
-                break;
-            }
-            if (!best[0] && ends_with(url, ".bin")) {
-                strlcpy(best, url, sizeof(best));
-            }
-        }
         parse_version(FW_VERSION, current);
         int cmp = compare_versions(latest, current);
         check_done(cmp > 0 ? UPD_NEWER : cmp == 0 ? UPD_SAME : UPD_OLDER, tag, best, NULL);
     } else {
         check_done(UPD_ERROR, NULL, NULL, err);
     }
-    free(reply);
+    free(win);
     vTaskDelete(NULL);
 }
 
@@ -552,7 +587,8 @@ bool ota_check(const char *src)
         return false;
     }
     /* TLS needs a deep stack */
-    if (xTaskCreate(check_task, "update", 10240, NULL, 4, NULL) != pdPASS) {
+    if (xTaskCreate(check_task, "update", 8192, NULL, 4, NULL) != pdPASS) {
+        heap_report("task");
         check_done(UPD_ERROR, NULL, NULL, "no_memory");
         return false;
     }
