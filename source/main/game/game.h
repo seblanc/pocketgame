@@ -87,7 +87,27 @@ typedef struct {
      * (NULL-terminated, up to 12 lines of 36 characters) and the console summary after "RULES " */
     const char *const *rules;
     const char *rules_uart;
+    /* optional, all NULL/false for the board and motion games above: */
+    /* more console verbs of the game; command() then gets the whole line ("guess 1") */
+    const char *const *more_verbs;
+    /* the READY line's name for the starter ("READY drawer=X"), NULL for "turn" */
+    const char *starter_key;
+    /* hit() that depends on the round (Draw & Guess phases); GAME_HIT_PEN: the finger draws */
+    int (*hit_state)(const void *st, int x, int y);
+    /* the finger on the canvas (GAME_PEN_DOWN | MOVE | UP); true when the drawing changed */
+    bool (*pen)(void *st, int phase, int x, int y);
+    /* step() is only a clock (no tilt): the app redraws a few times a second, not every step */
+    bool timed;
+    /* the turn banner's text and the player whose colour it takes (CELL_EMPTY: neutral) */
+    void (*banner)(const void *st, char *buf, int n, uint8_t *mark);
+    /* a finished round was scored: the scores and who starts the next round */
+    void (*finished)(const void *st, int wins_x, int wins_o, uint8_t next);
 } game_def_t;
+
+#define GAME_HIT_PEN (-2)
+#define GAME_PEN_DOWN 0
+#define GAME_PEN_MOVE 1
+#define GAME_PEN_UP 2
 
 static inline const game_round_t *game_round(const void *st) { return (const game_round_t *)st; }
 

@@ -1,8 +1,8 @@
 /* PocketGame: a small multi-game handheld on the ESP32-S3-LCD-1.54 touch board.
  *
  * Screens: home menu (one tile per game, top bar with battery % and Wi-Fi), the
- * games (tic-tac-toe, Connect 4 and the IMU games Tilt Duel, Hot Potato and Steady
- * Hand, modules in game/), a leave-game confirmation,
+ * games (tic-tac-toe, Connect 4, the IMU games Tilt Duel, Hot Potato and Steady Hand,
+ * and Draw & Guess, modules in game/), a leave-game confirmation,
  * Settings (volume, where 0 is silent, Wi-Fi, updates), the Wi-Fi setup hotspot screen,
  * the update screen (GitHub check, download progress) and a game's rules screen.
  *
@@ -36,6 +36,10 @@
  *                              the maze. Replies with the game's
  *                              events and one state line (BALL | BUBBLE | POTATO ...);
  *                              from then on the round ignores the sensor and the clock
+ *   done | reveal | guess <0-2> | undo | clear | start   Draw & Guess (switch to it):
+ *                              SCREEN handover, CHOICES a,b,c correct=n word=w, RESULT
+ *                              correct|wrong, SCORE X=n O=n, TURN drawer=O; sim word <idx>,
+ *                              sim correct <0-2>, sim stroke (WORD | SIM | STROKE ...)
  *   sim idle <ms> | sim touch  any screen: the idle timer jumps ahead (SIM idle=ms) / a
  *                              touch (INPUT touch); on USB a timeout replies
  *                              POWER usb: auto-off disabled and the board stays on
@@ -80,6 +84,7 @@
 #include "freertos/task.h"
 #include "esp_random.h"
 #include "game/connect4.h"
+#include "game/drawguess.h"
 #include "game/potato.h"
 #include "game/steady.h"
 #include "game/tictactoe.h"
@@ -107,7 +112,7 @@
 #define TIMER_MS 30 /* the hint animation and the idle check */
 
 /* the home menu tiles, in order; the first one is the default game */
-const game_def_t *const GAMES[] = {&TICTACTOE, &CONNECT4, &TILT_DUEL, &HOT_POTATO, &STEADY_HAND};
+const game_def_t *const GAMES[] = {&TICTACTOE, &CONNECT4, &TILT_DUEL, &HOT_POTATO, &STEADY_HAND, &DRAW_GUESS};
 const int GAME_COUNT = sizeof(GAMES) / sizeof(GAMES[0]);
 _Static_assert(sizeof(GAMES) / sizeof(GAMES[0]) <= GAME_MAX, "raise GAME_MAX");
 
@@ -223,7 +228,11 @@ static void new_round_locked(void)
     s_sim[s_v.game_idx] = false; /* the sensor and the clock drive the new round */
 }
 
-static void print_ready_locked(void) { out("READY turn=%c", game_mark_char(round_locked()->starter)); }
+static void print_ready_locked(void)
+{
+    const char *key = GAMES[s_v.game_idx]->starter_key;
+    out("READY %s=%c", key ? key : "turn", game_mark_char(round_locked()->starter));
+}
 
 static void app_open_game(int idx, const char *src)
 {
@@ -276,6 +285,9 @@ static void moved_locked(game_event_t ev)
         } else {
             s->wins_o++;
         }
+    }
+    if ((ev == GEV_WIN || ev == GEV_DRAW || ev == GEV_BOOM) && GAMES[s_v.game_idx]->finished) {
+        GAMES[s_v.game_idx]->finished(s->st.bytes, s->wins_x, s->wins_o, s->next_starter);
     }
 }
 
@@ -770,7 +782,7 @@ static void handle_sim(const char *arg)
     const game_def_t *g = GAMES[s_v.game_idx];
     if (s_v.screen != SCR_GAME || !g->step) {
         unlock();
-        out("ERR sim needs a motion game on screen (open tilt | potato | steady)");
+        out("ERR sim needs a motion game on screen (open tilt | potato | steady | draw)");
         return;
     }
     motion_t m = {.sim = true};
@@ -787,14 +799,19 @@ static void handle_sim(const char *arg)
         ms = a;
     } else if (strcmp(key, "shake") == 0 && n == 1) {
         m.shake = true;
-    } else if (n == 2 && g->sim_set && g->sim_set(slot_locked()->st.bytes, key, a)) {
+    } else if ((n == 1 || n == 2) && g->sim_set && g->sim_set(slot_locked()->st.bytes, key, n == 2 ? a : -1)) {
+        /* a key without a value gets -1 (Draw & Guess: sim stroke) */
         s_sim[s_v.game_idx] = true;
         unlock();
+        request_redraw();
         return;
     } else {
         unlock();
         out("ERR sim (tilt <ax> <ay> <ms> | shake | wait <ms>%s | idle <ms> | touch)",
-            g->autopilot ? " | seed <n> | solve" : g->sim_set ? " | fuse <ms>" : "");
+            g->autopilot ? " | seed <n> | solve"
+            : g->timed   ? " | word <idx> | correct <0-2> | stroke"
+            : g->sim_set ? " | fuse <ms>"
+                         : "");
         return;
     }
     s_sim[s_v.game_idx] = true;
@@ -935,10 +952,18 @@ static void handle_line(char *line)
                 app_game_command(i, arg);
                 return;
             }
+            for (const char *const *v = GAMES[i]->more_verbs; v && *v; v++) {
+                if (strcmp(line, *v) == 0) {
+                    char whole[64];
+                    snprintf(whole, sizeof(whole), "%s %s", line, arg);
+                    app_game_command(i, whole);
+                    return;
+                }
+            }
         }
-        out("ERR unknown command (new | play <0-8> | drop <0-6> ... | maze | pass | hold | sim ... | imu | rules | "
-            "board | status | open ttt|c4|tilt|potato|steady | back | yes | no | settings | vol <0-100> | wifi ... | "
-            "ota <url>|status | update check|install)");
+        out("ERR unknown command (new | play <0-8> | drop <0-6> ... | maze | pass | hold | done | reveal | guess <0-2> | "
+            "sim ... | imu | rules | board | status | open ttt|c4|tilt|potato|steady|draw | back | yes | no | "
+            "settings | vol <0-100> | wifi ... | ota <url>|status | update check|install)");
     }
 }
 
@@ -1005,6 +1030,18 @@ static void set_preview(int m)
     }
 }
 
+/* the finger on a drawing game's canvas: down, move or up at x,y */
+static void app_pen(int phase, int x, int y)
+{
+    lock();
+    const game_def_t *g = GAMES[s_v.game_idx];
+    bool changed = s_v.screen == SCR_GAME && g->pen && g->pen(slot_locked()->st.bytes, phase, x, y);
+    unlock();
+    if (changed) {
+        request_redraw();
+    }
+}
+
 /* Runs what a press does at once. Returns the hit for the touch task to finish: the
  * slider (a drag), aiming in a drag game (moves on release) and list taps (tiles,
  * SET UP), which act on release unless the finger scrolled the list. */
@@ -1033,6 +1070,9 @@ static hit_t on_press(int x, int y, int *arg)
         break;
     case HIT_AIM:
         set_preview(*arg);
+        return h;
+    case HIT_PEN:
+        app_pen(GAME_PEN_DOWN, x, y);
         return h;
     case HIT_MOVE:
         app_move(v.game_idx, *arg, "touch");
@@ -1095,6 +1135,7 @@ static void touch_task(void *arg)
 {
     bool was = false, slider = false, moved = false, waking = false;
     bool aim = false; /* aiming in a drag game: the move is made on release */
+    bool pen = false; /* drawing on a canvas (Draw & Guess) */
     hit_t pending = HIT_NONE; /* list tap waiting for the release */
     int pending_arg = -1, last_vol = -1, slider_x = 0;
     int press_x = 0, press_y = 0;
@@ -1120,6 +1161,7 @@ static void touch_task(void *arg)
             }
             slider = false;
             aim = false; /* the preview went with the screen change */
+            pen = false;
             pending = HIT_NONE;
         } else if (sc && scr == SCR_MENU && hint_dy != shown_dy) {
             /* the hint banner slides away: the game list grows into its space */
@@ -1151,6 +1193,7 @@ static void touch_task(void *arg)
             hit_t h = on_press(x, y, &pending_arg);
             slider = h == HIT_SLIDER;
             aim = h == HIT_AIM;
+            pen = h == HIT_PEN;
             pending = (h == HIT_TILE || h == HIT_WIFI_SETUP || h == HIT_UPDATE_CHECK) && !gliding ? h : HIT_NONE;
             if (slider) {
                 slider_x = x;
@@ -1175,6 +1218,8 @@ static void touch_task(void *arg)
                     play_tick(&last_tick);
                 }
             }
+        } else if (down && pen) {
+            app_pen(GAME_PEN_MOVE, x, y); /* the stroke follows the finger */
         } else if (down && aim) {
             lock();
             int idx = s_v.game_idx;
@@ -1187,7 +1232,10 @@ static void touch_task(void *arg)
             scroll_drag(sc, y, now);
             publish_scroll(scr, sc);
         } else if (!down && was) {
-            if (aim) {
+            if (pen) {
+                pen = false;
+                app_pen(GAME_PEN_UP, x, y);
+            } else if (aim) {
                 /* the move under the preview, where the finger left the board */
                 aim = false;
                 lock();
@@ -1235,6 +1283,7 @@ static void touch_task(void *arg)
 #define SHAKE_MG 1300     /* | |a| - 1 g | above this is a shake */
 #define SHAKE_QUIET_MS 700 /* one shake, not one per jolt of it */
 #define REDRAW_EVERY 2     /* motion ticks per frame while a round runs */
+#define REDRAW_TIMED 25    /* a clock-only game (Draw & Guess): its countdown, twice a second */
 #define MOVED_MG 150       /* a tilt change this big in a motion game restarts the idle timer */
 
 static void motion_task(void *arg)
@@ -1263,7 +1312,7 @@ static void motion_task(void *arg)
         const game_def_t *g = GAMES[s_v.game_idx];
         bool on = s_v.screen == SCR_GAME && g->step && !s_sim[s_v.game_idx];
         game_event_t ev = GEV_NONE;
-        bool running = false;
+        bool running = false, timed = g->timed;
         if (on) {
             motion_t m = {.tx = (int)fx, .ty = (int)fy, .shake = shake, .dt_ms = dt > 200 ? 200 : dt};
             if (shake) {
@@ -1274,7 +1323,7 @@ static void motion_task(void *arg)
             running = round_locked()->status == GAME_PLAYING;
         }
         unlock();
-        if (on && (shake || fabsf(fx - ref_x) + fabsf(fy - ref_y) > MOVED_MG)) {
+        if (on && !timed && (shake || fabsf(fx - ref_x) + fabsf(fy - ref_y) > MOVED_MG)) {
             /* a motion game is played by tilting: that is input for the idle timer */
             ref_x = fx;
             ref_y = fy;
@@ -1282,7 +1331,7 @@ static void motion_task(void *arg)
         }
         if (on) {
             play_event(ev);
-            if (running && tick % REDRAW_EVERY == 0) {
+            if (running && tick % (timed ? REDRAW_TIMED : REDRAW_EVERY) == 0) {
                 request_redraw();
             }
         }

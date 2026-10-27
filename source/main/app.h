@@ -9,7 +9,7 @@ typedef enum { SCR_MENU, SCR_GAME, SCR_CONFIRM, SCR_SETTINGS, SCR_WIFI, SCR_OFF,
 
 /* One entry per game on the home screen, in menu order (main.c). A new game is a
  * module in game/ exporting a game_def_t, added to this list. */
-#define GAME_MAX 5
+#define GAME_MAX 6
 extern const game_def_t *const GAMES[];
 extern const int GAME_COUNT;
 

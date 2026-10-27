@@ -17,6 +17,7 @@ typedef enum {
     HIT_UPDATE_GO,    /* update screen: install the newer release, or check again */
     HIT_RULES,        /* the "?" of a game with a help screen */
     HIT_RULES_DONE,
+    HIT_PEN,          /* a drawing game's canvas: the finger draws until it is lifted */
 } hit_t;
 
 /* Draws the whole screen of v and sends it to the panel. */

@@ -187,7 +187,12 @@ static void draw_game(const app_view_t *v)
 
     /* turn banner, filled in the colour of the player it is about */
     uint16_t tc, fill;
-    if (g->status == GAME_WIN) {
+    if (GAMES[v->game_idx]->banner) {
+        uint8_t mark = CELL_EMPTY;
+        GAMES[v->game_idx]->banner(s->st.bytes, buf, sizeof(buf), &mark);
+        tc = mark == CELL_EMPTY ? COL_TEXT : player_col(mark);
+        fill = mark == CELL_EMPTY ? COL_LINE : player_dim(mark);
+    } else if (g->status == GAME_WIN) {
         snprintf(buf, sizeof(buf), "%c WINS", game_mark_char(g->winner));
         tc = player_col(g->winner);
         fill = player_dim(g->winner);
@@ -504,8 +509,12 @@ hit_t ui_hit(const app_view_t *v, int x, int y, int *arg)
         if (game_round(v->games[v->game_idx].st.bytes)->status != GAME_PLAYING) {
             return HIT_NEW_GAME;
         }
-        int m = GAMES[v->game_idx]->hit(x, y);
-        if (GAMES[v->game_idx]->drag) {
+        const game_def_t *gd = GAMES[v->game_idx];
+        int m = gd->hit_state ? gd->hit_state(v->games[v->game_idx].st.bytes, x, y) : gd->hit(x, y);
+        if (m == GAME_HIT_PEN) {
+            return HIT_PEN;
+        }
+        if (gd->drag) {
             *arg = m;
             return HIT_AIM;
         }
