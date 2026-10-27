@@ -1,12 +1,51 @@
 #include "drawguess.h"
 #include <string.h>
 
-/* simple nouns that are quick to draw with a finger, lower case a-z only (the UART lines) */
+/* French nouns of objects, animals and things that are quick to draw with a finger. One
+ * word each, accents dropped and lower case a-z only (the UART lines; the screen font
+ * shows them in capitals, where French usually omits the accents anyway). */
 const char *const DG_WORDS[] = {
-    "cat",    "dog",    "sun",   "house", "tree",   "car",      "fish",    "apple", "star",  "moon",
-    "boat",   "flower", "ball",  "bird",  "hat",    "cup",      "key",     "chair", "clock", "ghost",
-    "snake",  "heart",  "cake",  "pizza", "rocket", "robot",    "banana",  "train", "cloud", "shoe",
-    "book",   "lamp",   "egg",   "bell",  "spider", "umbrella", "snowman", "kite",  "crown", "door",
+    /* animaux */
+    "chat", "chien", "poisson", "oiseau", "cheval", "vache", "cochon", "mouton", "lapin", "souris",
+    "canard", "poule", "serpent", "tortue", "escargot", "papillon", "abeille", "araignee", "fourmi",
+    "coccinelle", "elephant", "girafe", "lion", "tigre", "singe", "ours", "loup", "renard", "zebre",
+    "crocodile", "requin", "baleine", "dauphin", "pieuvre", "crabe", "meduse", "grenouille", "hibou",
+    "pingouin", "chameau", "kangourou", "panda", "hippopotame", "ecureuil", "herisson", "dinosaure",
+    "dragon", "licorne", "ver", "hamster",
+    /* nature */
+    "soleil", "lune", "etoile", "nuage", "pluie", "arbre", "fleur", "feuille", "montagne", "volcan",
+    "ile", "plage", "vague", "riviere", "cactus", "champignon", "palmier", "sapin", "rose", "tulipe",
+    "eclair", "flocon", "feu", "caillou", "tournesol", "glacon", "planete", "comete",
+    /* a manger */
+    "pomme", "poire", "banane", "cerise", "fraise", "raisin", "citron", "orange", "ananas", "carotte",
+    "tomate", "pasteque", "gateau", "pizza", "pain", "fromage", "oeuf", "glace", "bonbon", "sucette",
+    "croissant", "baguette", "hamburger", "frites", "saucisse", "biscuit", "chocolat", "sandwich",
+    "poivron", "salade", "noix", "brocoli", "citrouille", "crepe", "beignet",
+    /* la maison */
+    "maison", "porte", "fenetre", "chaise", "table", "lit", "lampe", "horloge", "tasse", "verre",
+    "assiette", "fourchette", "couteau", "cuillere", "bouteille", "casserole", "bougie", "miroir",
+    "canape", "television", "telephone", "ordinateur", "clavier", "livre", "crayon", "stylo",
+    "ciseaux", "regle", "gomme", "cartable", "cle", "cadenas", "cloche", "balai", "seau", "parapluie",
+    "valise", "cadeau", "ballon", "baignoire", "douche", "robinet", "frigo", "armoire", "escalier",
+    "toit", "cheminee", "radiateur", "ventilateur", "aspirateur", "poubelle", "tableau", "coussin",
+    /* vetements et bijoux */
+    "chapeau", "chaussure", "botte", "chaussette", "pantalon", "robe", "jupe", "chemise", "cravate",
+    "lunettes", "gant", "echarpe", "bonnet", "casquette", "couronne", "bague", "collier", "montre",
+    "sac", "ceinture", "pyjama", "tablier",
+    /* transports */
+    "voiture", "bateau", "avion", "train", "velo", "moto", "camion", "bus", "fusee", "helicoptere",
+    "tracteur", "trottinette", "ambulance", "voilier", "montgolfiere", "roue", "ancre", "metro",
+    "parachute", "taxi",
+    /* objets et lieux */
+    "guitare", "piano", "tambour", "trompette", "violon", "marteau", "tournevis", "scie", "echelle",
+    "pelle", "ampoule", "aimant", "loupe", "boussole", "enveloppe", "timbre", "drapeau", "tente",
+    "coeur", "fantome", "robot", "squelette", "sorciere", "chateau", "pont", "phare", "moulin",
+    "eglise", "pyramide", "igloo", "cabane", "puits", "fontaine", "banc", "epee", "bouclier",
+    "fleche", "cible", "toupie", "poupee", "trophee", "medaille", "sifflet", "micro", "radio",
+    "pile", "aiguille", "bouton", "hamac", "brosse", "peigne", "savon", "raquette", "panier",
+    "balancoire", "toboggan", "sablier", "lanterne", "tresor", "pirate", "clown", "ange", "sirene",
+    /* le corps */
+    "main", "pied", "oeil", "nez", "bouche", "oreille", "dent", "os",
 };
 const int DG_WORD_COUNT = sizeof(DG_WORDS) / sizeof(DG_WORDS[0]);
 
@@ -21,7 +60,7 @@ void dg_start(dg_t *g, uint8_t first, int word)
     memset(g, 0, sizeof(*g));
     game_round_start(&g->r, first);
     g->phase = DG_WORD;
-    g->word = (uint8_t)(word >= 0 && word < DG_WORD_COUNT ? word : 0);
+    g->word = (uint16_t)(word >= 0 && word < DG_WORD_COUNT ? word : 0);
     g->force_correct = -1;
     g->picked = -1;
 }
@@ -108,10 +147,10 @@ dg_result_t dg_clear(dg_t *g)
 }
 
 /* a random word index other than the secret word and the decoys already picked */
-static uint8_t pick_decoy(const dg_t *g, int n)
+static uint16_t pick_decoy(const dg_t *g, int n)
 {
     for (;;) {
-        uint8_t w = (uint8_t)(game_random() % DG_WORD_COUNT);
+        uint16_t w = (uint16_t)(game_random() % DG_WORD_COUNT);
         bool used = w == g->word;
         for (int i = 0; i < n; i++) {
             used = used || g->choices[i] == w;
@@ -132,7 +171,7 @@ dg_result_t dg_done(dg_t *g, bool force)
     }
     g->correct = g->force_correct >= 0 ? (uint8_t)g->force_correct : (uint8_t)(game_random() % DG_CHOICES);
     /* decoys first (distinct from the word and each other), then the word in its place */
-    uint8_t decoys[DG_CHOICES - 1];
+    uint16_t decoys[DG_CHOICES - 1];
     for (int i = 0; i < DG_CHOICES - 1; i++) {
         decoys[i] = pick_decoy(g, i);
         g->choices[i] = decoys[i];
@@ -429,7 +468,7 @@ static bool dg_sim_set(void *st, const char *key, long val)
         } else if (val < 0 || val >= DG_WORD_COUNT) {
             app_out("ERR word 0-%d", DG_WORD_COUNT - 1);
         } else {
-            g->word = (uint8_t)val;
+            g->word = (uint16_t)val;
             app_out("WORD idx=%ld word=%s", val, word_of(g->word));
         }
         return true;

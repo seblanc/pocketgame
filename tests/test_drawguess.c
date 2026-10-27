@@ -2,6 +2,7 @@
  * gcc -DGAME_RULES_ONLY -I source/main tests/test_drawguess.c source/main/game/drawguess.c */
 #include <assert.h>
 #include <stdio.h>
+#include <string.h>
 #include "game/drawguess.h"
 
 static uint32_t s_rand = 12345;
@@ -29,6 +30,23 @@ static void check_choices(const dg_t *g, int correct)
 
 int main(void)
 {
+    /* the word list: 200+ distinct single words, a-z only, short enough for a button */
+    assert(DG_WORD_COUNT >= 200);
+    for (int i = 0; i < DG_WORD_COUNT; i++) {
+        size_t len = strlen(DG_WORDS[i]);
+        assert(len >= 2 && len <= 12);
+        for (size_t c = 0; c < len; c++) {
+            assert(DG_WORDS[i][c] >= 'a' && DG_WORDS[i][c] <= 'z');
+        }
+        for (int j = i + 1; j < DG_WORD_COUNT; j++) {
+            if (strcmp(DG_WORDS[i], DG_WORDS[j]) == 0) {
+                printf("duplicate word %s\n", DG_WORDS[i]);
+                assert(0);
+            }
+        }
+    }
+    printf("%d words\n", DG_WORD_COUNT);
+
     dg_t g;
     /* round 1: X draws word 3, O guesses the middle button */
     dg_start(&g, CELL_X, 3);

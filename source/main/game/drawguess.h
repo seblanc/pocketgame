@@ -2,7 +2,7 @@
 #include "game.h"
 
 /* Draw & Guess (Pictionary for two): the drawer (r.starter) sees a secret word from a
- * built-in list and taps to start, draws it with a finger within 60 s (UNDO, CLEAR,
+ * built-in list of 200+ French nouns and taps to start, draws it with a finger within 60 s (UNDO, CLEAR,
  * DONE), then a hand-over screen asks to pass the board; the guesser taps to see the
  * drawing and picks one of 3 words (the secret word and 2 distinct decoys, shuffled).
  * A right guess is a win for the guesser (a point), a wrong one ends the round as a
@@ -32,9 +32,9 @@ typedef enum { DG_OK, DG_ERR_PHASE, DG_ERR_EMPTY, DG_ERR_RANGE, DG_ERR_FULL } dg
 typedef struct {
     game_round_t r;     /* first member: see game.h; r.starter = the drawer, r.turn = who holds the board */
     uint8_t phase;      /* dg_phase_t */
-    uint8_t word;       /* index into DG_WORDS */
     int8_t force_correct; /* sim: the button of the secret word, -1 random */
-    uint8_t choices[DG_CHOICES];
+    uint16_t word;      /* index into DG_WORDS */
+    uint16_t choices[DG_CHOICES];
     uint8_t correct;    /* the button of the secret word */
     int8_t picked;      /* the guesser's button, -1 none yet */
     bool pen_down;      /* a stroke is being drawn */
