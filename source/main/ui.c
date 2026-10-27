@@ -272,8 +272,9 @@ static void draw_update(const app_view_t *v)
             go = o->has_asset ? "INSTALL" : "CHECK";
             break;
         case UPD_SAME:
-        case UPD_OLDER:
-            msg = "UP TO DATE";
+        case UPD_OLDER: /* an older release is never offered: no downgrade */
+            snprintf(buf, sizeof(buf), "UP TO DATE (%s)", FW_VERSION);
+            msg = buf;
             c = COL_ACCENT;
             go = "CHECK";
             break;

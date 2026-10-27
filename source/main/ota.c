@@ -178,7 +178,13 @@ static void fail(const char *reason)
     app_ota_changed();
 }
 
-/* NULL if head (HEAD_LEN bytes) starts a PocketGame app for this chip, else why not */
+#define VER_PARTS 5
+static bool parse_version(const char *s, int v[VER_PARTS]);
+static int compare_versions(const int a[VER_PARTS], const int b[VER_PARTS]);
+
+/* NULL if head (HEAD_LEN bytes) starts a PocketGame app for this chip, else why not.
+ * Release images carry their tag as the app version: one older than the running
+ * FW_VERSION is refused (a commit-hash test build has no vX.Y and is let through). */
 static const char *check_head(const uint8_t *head)
 {
     const esp_image_header_t *h = (const esp_image_header_t *)head;
@@ -199,6 +205,11 @@ static const char *check_head(const uint8_t *head)
     char ver[sizeof(d->version) + 1];
     strlcpy(ver, d->version, sizeof(ver));
     app_out("OTA image project=%.32s build=%s", d->project_name, ver);
+    int img[VER_PARTS], cur[VER_PARTS];
+    if (parse_version(ver, img) && parse_version(FW_VERSION, cur) && compare_versions(img, cur) < 0) {
+        app_out("OTA image %s is older than running %s: no downgrade", ver, FW_VERSION);
+        return "downgrade";
+    }
     return NULL;
 }
 
@@ -381,6 +392,10 @@ bool ota_install_latest(const char *src)
     bool asset = s_v.has_asset;
     strlcpy(url, s_asset_url, sizeof(url));
     portEXIT_CRITICAL(&s_mux);
+    if (r == UPD_SAME || r == UPD_OLDER) {
+        app_out("ERR up to date (%s, no downgrade)", FW_VERSION);
+        return false;
+    }
     if (r != UPD_NEWER) {
         app_out("ERR no newer release (update check first)");
         return false;
@@ -434,8 +449,6 @@ static bool ends_with(const char *s, const char *tail)
     size_t a = strlen(s), b = strlen(tail);
     return a >= b && strcmp(s + a - b, tail) == 0;
 }
-
-#define VER_PARTS 5
 
 /* vMAJOR.MINOR[.PATCH][-YYYY-MM] -> major, minor, patch, year, month (missing parts 0):
  * "v1.1.0" -> 1,1,0,0,0 and "v1.0-2026-10" -> 1,0,0,2026,10, so v1.1.0 is newer.
