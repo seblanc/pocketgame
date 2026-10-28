@@ -195,7 +195,7 @@ static void ttt_icon(int x, int y, int s)
 
 const game_def_t TICTACTOE = {
     .id = "ttt",
-    .title = "TIC-TAC-TOE",
+    .title = "MORPION",
     .verb = "play",
     .new_round = ttt_new_round,
     .print = ttt_print,

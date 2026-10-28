@@ -1,4 +1,6 @@
 #pragma once
+#include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 #include "esp_err.h"
 
@@ -40,3 +42,9 @@ int gfx_text_w(const char *s, int scale);
 void gfx_text(int x, int y, const char *s, int scale, uint16_t c);
 void gfx_text_mid(int cx, int y, const char *s, int scale, uint16_t c);
 void gfx_text_right(int x1, int y, const char *s, int scale, uint16_t c);
+/* Text capture for the "text" console command: while buf is set, every string drawn
+ * (even clipped off screen) or noted is appended to it, " | " between them; NULL stops.
+ * Muted, drawn text is not recorded (a wrapped string noted once as a whole). */
+void gfx_text_capture(char *buf, size_t n);
+void gfx_text_note(const char *s);
+void gfx_text_mute(bool on);

@@ -2,7 +2,7 @@
  *
  * Screens: home menu (one tile per game, top bar with battery % and Wi-Fi), the
  * games (tic-tac-toe, Connect 4, the IMU games Tilt Duel, Hot Potato and Steady Hand,
- * Draw & Guess and Coin Platformer, modules in game/), a leave-game confirmation,
+ * Draw & Guess, Coin Platformer and Defi Secousse, modules in game/), a leave-game confirmation,
  * Settings (volume, where 0 is silent, Wi-Fi, updates), the Wi-Fi setup hotspot screen,
  * the update screen (GitHub check, download progress) and a game's rules screen.
  *
@@ -47,6 +47,15 @@
  *                              FINISH X coins=n left=ns points=n, TURN O + RUN O id=hex
  *                              same=yes | WIN | DRAW (by points: 10 a coin + 1 a second left).
  *                              On the board tilting walks, RIGHT jumps (or starts the next round)
+ *   dare get <idx> | dare count | pass   Defi Secousse (switches to it): DARE idx=n text=..,
+ *                              DARES n=..; pass after a dare: PASS X, TURN O | ERR no dare;
+ *                              sim shake <ms> (steady shaking): SHAKE X ms=.. need=.. |
+ *                              DARE X idx=n left=n text=.. | ERR dare shown; sim cycle draws a
+ *                              whole deck: CYCLE draws=n unique=n total=n. On the board a tap
+ *                              or RIGHT hands it on. "pass" goes to the game on screen first
+ *   text                       TEXT screen=<name> <every string the screen shows, " | " between>
+ *                              (the UI is French, upper case without accents; the protocol
+ *                              stays English; STATUS ... lang=fr)
  *   sim idle <ms> | sim touch  any screen: the idle timer jumps ahead (SIM idle=ms) / a
  *                              touch (INPUT touch); on USB a timeout replies
  *                              POWER usb: auto-off disabled and the board stays on
@@ -91,6 +100,7 @@
 #include "freertos/task.h"
 #include "esp_random.h"
 #include "game/connect4.h"
+#include "game/dare.h"
 #include "game/drawguess.h"
 #include "game/potato.h"
 #include "game/steady.h"
@@ -121,7 +131,7 @@
 
 /* the home menu tiles, in order; the first one is the default game */
 const game_def_t *const GAMES[] = {&TICTACTOE, &CONNECT4, &TILT_DUEL, &HOT_POTATO, &STEADY_HAND, &DRAW_GUESS,
-                                     &COIN_PLATFORMER};
+                                     &COIN_PLATFORMER, &DEFI_SECOUSSE};
 const int GAME_COUNT = sizeof(GAMES) / sizeof(GAMES[0]);
 _Static_assert(sizeof(GAMES) / sizeof(GAMES[0]) <= GAME_MAX, "raise GAME_MAX");
 
@@ -180,6 +190,15 @@ static void request_redraw(void)
     if (s_display_task) {
         xTaskNotifyGive(s_display_task);
     }
+}
+
+/* "text": the next frame also lists every string it draws, printed as one TEXT line */
+static volatile bool s_text_req;
+
+static void request_text(void)
+{
+    s_text_req = true;
+    request_redraw();
 }
 
 void app_net_changed(void) { request_redraw(); }
@@ -305,7 +324,7 @@ static void play_event(game_event_t ev)
     static const sound_t SOUNDS[] = {
         [GEV_MOVE_X] = SND_X, [GEV_MOVE_O] = SND_O, [GEV_BAD] = SND_BAD,
         [GEV_WIN] = SND_WIN,  [GEV_DRAW] = SND_DRAW, [GEV_BOOM] = SND_BOOM,
-        [GEV_RUN_END] = SND_END,
+        [GEV_RUN_END] = SND_END, [GEV_DARE] = SND_DARE,
     };
     if (ev != GEV_NONE) {
         sound_play(SOUNDS[ev]);
@@ -431,7 +450,7 @@ static void app_rules(const char *src)
     const game_def_t *g = GAMES[s_v.game_idx];
     if ((s_v.screen != SCR_GAME && s_v.screen != SCR_RULES) || !g->rules) {
         unlock();
-        out("ERR no rules here (open potato first)");
+        out("ERR no rules here (open potato or dare first)");
         return;
     }
     out("RULES src=%s", src);
@@ -510,7 +529,7 @@ static void print_status(void)
     bool usb = usb_power_locked(now_ms());
     unlock();
     out("STATUS screen=%s game=%s bat=%d mv=%d wifi=%s ip=%s starter=%c vol=%d fw=%s idle=%u/%ds power=%s autooff=%s "
-        "hint=%s",
+        "hint=%s lang=fr",
         SCREEN_NAMES[v.screen], GAMES[v.game_idx]->id, v.bat_pct, v.bat_mv, net_state_name(v.wifi),
         v.ip[0] ? v.ip : "-", game_mark_char(game_round(v.games[v.game_idx].st.bytes)->starter), v.vol, FW_VERSION,
         idle_s(), IDLE_OFF_MS / 1000, POWER_NAMES[pwr], usb ? "off" : "on", HINT_NAMES[hint]);
@@ -792,7 +811,7 @@ static void handle_sim(const char *arg)
     const game_def_t *g = GAMES[s_v.game_idx];
     if (s_v.screen != SCR_GAME || !g->step) {
         unlock();
-        out("ERR sim needs a motion game on screen (open tilt | potato | steady | draw | plat)");
+        out("ERR sim needs a motion game on screen (open tilt | potato | steady | draw | plat | dare)");
         return;
     }
     motion_t m = {.sim = true};
@@ -825,6 +844,11 @@ static void handle_sim(const char *arg)
         ms = a;
     } else if (strcmp(key, "shake") == 0 && n == 1) {
         m.shake = true;
+    } else if (strcmp(key, "shake") == 0 && n == 2 && a > 0 && a <= 600000) {
+        /* <ms> of steady shaking (Defi Secousse), starting with a jolt */
+        m.shake = true;
+        m.shaking = true;
+        ms = a;
     } else if ((n == 1 || n == 2) && g->sim_set && g->sim_set(slot_locked()->st.bytes, key, n == 2 ? a : -1)) {
         /* a key without a value gets -1 (Draw & Guess: sim stroke) */
         s_sim[s_v.game_idx] = true;
@@ -833,12 +857,13 @@ static void handle_sim(const char *arg)
         return;
     } else {
         unlock();
-        out("ERR sim (tilt <ax> <ay> <ms> | shake | wait <ms>%s | idle <ms> | touch)",
+        out("ERR sim (tilt <ax> <ay> <ms> | shake [<ms>] | wait <ms>%s | idle <ms> | touch)",
             g->steer       ? " | jump | move L|R <ms> | autoplay"
             : g->autopilot ? " | seed <n> | solve"
-            : g->timed   ? " | word <idx> | correct <0-2> | stroke"
-            : g->sim_set ? " | fuse <ms>"
-                         : "");
+            : g->timed      ? " | word <idx> | correct <0-2> | stroke"
+            : g->right_taps ? " | cycle"
+            : g->sim_set    ? " | fuse <ms>"
+                            : "");
         return;
     }
     s_sim[s_v.game_idx] = true;
@@ -903,6 +928,24 @@ static void handle_update(const char *arg)
     } else {
         out("ERR update (check | install)");
     }
+}
+
+/* line (with its arguments arg) as a console verb of game i; false if it is not one */
+static bool game_verb(int i, const char *line, const char *arg)
+{
+    if (strcmp(line, GAMES[i]->verb) == 0) {
+        app_game_command(i, arg);
+        return true;
+    }
+    for (const char *const *v = GAMES[i]->more_verbs; v && *v; v++) {
+        if (strcmp(line, *v) == 0) {
+            char whole[64];
+            snprintf(whole, sizeof(whole), "%s %s", line, arg);
+            app_game_command(i, whole);
+            return true;
+        }
+    }
+    return false;
 }
 
 static void handle_line(char *line)
@@ -973,23 +1016,24 @@ static void handle_line(char *line)
         handle_ota(arg);
     } else if (strcmp(line, "update") == 0) {
         handle_update(arg);
+    } else if (strcmp(line, "text") == 0) {
+        request_text();
     } else {
+        /* a verb two games share ("pass") goes to the game on screen first */
+        lock();
+        int shown = s_v.screen == SCR_GAME ? s_v.game_idx : -1;
+        unlock();
+        if (shown >= 0 && game_verb(shown, line, arg)) {
+            return;
+        }
         for (int i = 0; i < GAME_COUNT; i++) {
-            if (strcmp(line, GAMES[i]->verb) == 0) {
-                app_game_command(i, arg);
+            if (game_verb(i, line, arg)) {
                 return;
-            }
-            for (const char *const *v = GAMES[i]->more_verbs; v && *v; v++) {
-                if (strcmp(line, *v) == 0) {
-                    char whole[64];
-                    snprintf(whole, sizeof(whole), "%s %s", line, arg);
-                    app_game_command(i, whole);
-                    return;
-                }
             }
         }
         out("ERR unknown command (new | play <0-8> | drop <0-6> ... | maze | pass | hold | done | reveal | guess <0-2> | "
-            "level | sim ... | imu | rules | board | status | open ttt|c4|tilt|potato|steady|draw|plat | back | yes | no | "
+            "level | dare get <n>|count | sim ... | imu | rules | board | status | text | "
+            "open ttt|c4|tilt|potato|steady|draw|plat|dare | back | yes | no | "
             "settings | vol <0-100> | wifi ... | ota <url>|status | update check|install)");
     }
 }
@@ -1038,10 +1082,28 @@ static void console_task(void *arg)
 static void display_task(void *arg)
 {
     static app_view_t v; /* off the stack */
+    static char text[1200];
     for (;;) {
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
         snapshot(&v);
+        bool capture = s_text_req;
+        if (capture) {
+            s_text_req = false;
+            gfx_text_capture(text, sizeof(text));
+        }
         ui_render(&v);
+        if (capture) {
+            gfx_text_capture(NULL, 0);
+            /* longer than app_out() takes: written here in one piece */
+            static char line[sizeof(text) + 40];
+            int n = snprintf(line, sizeof(line), "TEXT screen=%s %s\n", SCREEN_NAMES[v.screen], text);
+            if (n > (int)sizeof(line) - 1) {
+                n = sizeof(line) - 1;
+                line[n - 1] = '\n';
+            }
+            fwrite(line, 1, n, stdout);
+            fflush(stdout);
+        }
     }
 }
 
@@ -1312,11 +1374,14 @@ static void touch_task(void *arg)
 #define REDRAW_EVERY 2     /* motion ticks per frame while a round runs */
 #define REDRAW_TIMED 25    /* a clock-only game (Draw & Guess): its countdown, twice a second */
 #define MOVED_MG 150       /* a tilt change this big in a motion game restarts the idle timer */
+#define SHAKING_MG 450     /* | |a| - 1 g | above this is a jolt of continued shaking */
+#define SHAKING_HOLD_MS 300 /* the board counts as shaken this long after each jolt */
 
 static void motion_task(void *arg)
 {
     float fx = 0, fy = 0, sx = 0, ref_x = 0, ref_y = 0;
-    uint32_t last = now_ms(), shake_at = 0;
+    uint32_t last = now_ms(), shake_at = 0, jolt_at = 0;
+    bool jolted = false;
     for (int tick = 0;; tick++) {
         vTaskDelay(pdMS_TO_TICKS(MOTION_MS));
         uint32_t now = now_ms(), dt = now - last;
@@ -1336,6 +1401,12 @@ static void motion_task(void *arg)
             shake = true;
             shake_at = now;
         }
+        /* shaking goes on while jolts keep coming (Defi Secousse adds up its time) */
+        if (live && fabsf(mag - 1000) > SHAKING_MG) {
+            jolt_at = now;
+            jolted = true;
+        }
+        bool shaking = jolted && now - jolt_at < SHAKING_HOLD_MS;
 
         lock();
         const game_def_t *g = GAMES[s_v.game_idx];
@@ -1343,7 +1414,8 @@ static void motion_task(void *arg)
         game_event_t ev = GEV_NONE;
         bool running = false, timed = g->timed;
         if (on) {
-            motion_t m = {.tx = (int)(g->steer ? sx : fx), .ty = (int)fy, .shake = shake, .dt_ms = dt > 200 ? 200 : dt};
+            motion_t m = {.tx = (int)(g->steer ? sx : fx), .ty = (int)fy, .shake = shake, .shaking = shaking,
+                          .dt_ms = dt > 200 ? 200 : dt};
             if (shake) {
                 out("SHAKE mg=%d", (int)mag);
             }
@@ -1352,7 +1424,7 @@ static void motion_task(void *arg)
             running = round_locked()->status == GAME_PLAYING;
         }
         unlock();
-        if (on && !timed && (shake || fabsf(fx - ref_x) + fabsf(fy - ref_y) > MOVED_MG)) {
+        if (on && !timed && (shake || shaking || fabsf(fx - ref_x) + fabsf(fy - ref_y) > MOVED_MG)) {
             /* a motion game is played by tilting: that is input for the idle timer */
             ref_x = fx;
             ref_y = fy;
@@ -1395,18 +1467,19 @@ static void power_off(void)
 
 /* RIGHT in a steering game on screen (Coin Platformer, held upright and steered by tilt):
  * a jump while the round runs (the first one starts the run), the next round once it is
- * over, so no finger is needed on the screen */
+ * over, so no finger is needed on the screen. In Defi Secousse it hands the board on. */
 static void key_jump(void)
 {
     lock();
     const game_def_t *g = GAMES[s_v.game_idx];
     int idx = s_v.game_idx;
-    bool steer = s_v.screen == SCR_GAME && g->steer;
+    bool steer = s_v.screen == SCR_GAME && (g->steer || g->right_taps);
     bool over = steer && round_locked()->status != GAME_PLAYING;
     unlock();
     if (over) {
         app_new_game("button");
     } else if (steer) {
+        /* a jump, or a tap of the round (Defi Secousse: the next player) */
         app_move(idx, 0, "button");
         request_redraw();
     }

@@ -546,7 +546,7 @@ static void secs(char *b, size_t n, int32_t ms)
     if (ms == TILT_NOT_RUN) {
         snprintf(b, n, "--");
     } else if (ms == TILT_TIMEOUT) {
-        snprintf(b, n, "TIME");
+        snprintf(b, n, "TEMPS");
     } else {
         snprintf(b, n, "%ld.%ld", (long)(ms / 1000), (long)(ms / 100 % 10));
     }
@@ -592,7 +592,7 @@ static void tilt_draw(const void *st, int preview)
     gfx_text_right(MAZE_X0 + TILT_COLS * TILT_CELL, INFO_Y, line, 1, COL_O);
     if (g->r.status == GAME_PLAYING) {
         if (g->run == TILT_WAIT) {
-            snprintf(line, sizeof(line), "TAP TO START");
+            snprintf(line, sizeof(line), "TOUCHE = DEPART");
         } else {
             secs(line, sizeof(line), (int32_t)g->ms);
         }
@@ -617,7 +617,7 @@ static void tilt_icon(int x, int y, int s)
 
 const game_def_t TILT_DUEL = {
     .id = "tilt",
-    .title = "TILT DUEL",
+    .title = "LABYRINTHE",
     .verb = "maze",
     .new_round = tilt_new_round,
     .print = tilt_print,

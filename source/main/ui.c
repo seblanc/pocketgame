@@ -76,10 +76,12 @@ static int menu_h(void) { return TILE_Y0 + GAME_COUNT * (TILE_H + TILE_GAP) - TI
 /* rect r of a list scrolled by scroll, in screen coordinates */
 static rect_t at(rect_t r, int y0, int scroll) { return (rect_t){r.x, y0 + r.y - scroll, r.w, r.h}; }
 
+/* the label in large letters, small when the French word is too long for the button */
 static void button(rect_t r, const char *label, uint16_t c)
 {
+    int scale = gfx_text_w(label, 2) <= r.w - 4 ? 2 : 1;
     gfx_rrect(r.x, r.y, r.w, r.h, 8, c);
-    gfx_text_mid(r.x + r.w / 2, r.y + (r.h - 14) / 2, label, 2, c);
+    gfx_text_mid(r.x + r.w / 2, r.y + (r.h - 7 * scale) / 2, label, scale, c);
 }
 
 static void hline(int y) { gfx_rect(0, y, SCREEN_W, 1, COL_LINE); }
@@ -138,9 +140,42 @@ static void draw_bar(const app_view_t *v)
 
     wifi_icon(224, 17, v->wifi);
     if (v->wifi == WIFI_SETUP) {
-        gfx_text_right(206, 8, "SETUP", 1, COL_DIM);
+        gfx_text_right(206, 8, "CONFIG", 1, COL_DIM);
     }
     hline(BAR_H);
+}
+
+/* a tile title at x, centred on y: one line, or two split at the last space that fits
+ * (the French titles are longer) */
+static void tile_title(int x, int y, int w, const char *s)
+{
+    if (gfx_text_w(s, 2) <= w) {
+        gfx_text(x, y - 7, s, 2, COL_TEXT);
+        return;
+    }
+    char a[24];
+    strlcpy(a, s, sizeof(a));
+    char *cut = NULL;
+    for (char *p = a; *p; p++) {
+        if (*p == ' ') {
+            *p = '\0';
+            bool fits = gfx_text_w(a, 2) <= w;
+            *p = ' ';
+            if (fits) {
+                cut = p;
+            }
+        }
+    }
+    if (!cut) {
+        gfx_text(x, y - 3, s, 1, COL_TEXT);
+        return;
+    }
+    *cut = '\0';
+    gfx_text_note(s); /* the title as one string for the "text" console command */
+    gfx_text_mute(true);
+    gfx_text(x, y - 16, a, 2, COL_TEXT);
+    gfx_text(x, y + 2, cut + 1, 2, COL_TEXT);
+    gfx_text_mute(false);
 }
 
 static void draw_menu(const app_view_t *v)
@@ -151,13 +186,16 @@ static void draw_menu(const app_view_t *v)
     for (int i = 0; i < GAME_COUNT; i++) {
         rect_t r = at(tile_rect(i), MENU_Y0, v->menu_scroll);
         if (r.y + r.h < MENU_Y0 || r.y >= y1) {
+            gfx_text_note(GAMES[i]->title); /* scrolled out of view, still on the menu */
             continue;
         }
         gfx_rrect(r.x, r.y, r.w, r.h, 12, COL_LINE);
         if (GAMES[i]->icon) {
+            gfx_text_mute(true); /* an icon's letters are no text */
             GAMES[i]->icon(r.x + 12, r.y + (r.h - 48) / 2, 48);
+            gfx_text_mute(false);
         }
-        gfx_text(r.x + 72, r.y + (r.h - 14) / 2, GAMES[i]->title, 2, COL_TEXT);
+        tile_title(r.x + 72, r.y + r.h / 2, r.w - 72 - 4, GAMES[i]->title);
     }
     gfx_clip_y(0, SCREEN_H);
     if (v->hint_dy < HINT_SLIDE_PX) {
@@ -165,7 +203,7 @@ static void draw_menu(const app_view_t *v)
          * seconds after the menu opens; the screen edge clips it */
         gfx_rect(0, y1, SCREEN_W, HINT_SLIDE_PX, COL_BANNER);
         hline(y1);
-        gfx_text_mid(SCREEN_W / 2, y1 + 9, "HOLD L + R FOR SETTINGS", 1, COL_DIM);
+        gfx_text_mid(SCREEN_W / 2, y1 + 9, "MAINTIENS G + D : PARAMETRES", 1, COL_DIM);
     }
 }
 
@@ -193,15 +231,15 @@ static void draw_game(const app_view_t *v)
         tc = mark == CELL_EMPTY ? COL_TEXT : player_col(mark);
         fill = mark == CELL_EMPTY ? COL_LINE : player_dim(mark);
     } else if (g->status == GAME_WIN) {
-        snprintf(buf, sizeof(buf), "%c WINS", game_mark_char(g->winner));
+        snprintf(buf, sizeof(buf), "%c GAGNE", game_mark_char(g->winner));
         tc = player_col(g->winner);
         fill = player_dim(g->winner);
     } else if (g->status == GAME_DRAW) {
-        snprintf(buf, sizeof(buf), "DRAW");
+        snprintf(buf, sizeof(buf), "EGALITE");
         tc = COL_TEXT;
         fill = COL_LINE;
     } else {
-        snprintf(buf, sizeof(buf), g->moves == 0 ? "%c STARTS" : "%c TO MOVE", game_mark_char(g->turn));
+        snprintf(buf, sizeof(buf), g->moves == 0 ? "%c COMMENCE" : "TOUR DE %c", game_mark_char(g->turn));
         tc = player_col(g->turn);
         fill = player_dim(g->turn);
     }
@@ -226,17 +264,17 @@ static void draw_rules(const app_view_t *v)
     for (const char *const *l = g->rules; l && *l; l++, y += 12) {
         gfx_text(12, y, *l, 1, **l ? COL_TEXT : COL_DIM);
     }
-    gfx_text_mid(SCREEN_W / 2, 222, "TAP OR LEFT = BACK", 1, COL_DIM);
+    gfx_text_mid(SCREEN_W / 2, 222, "TOUCHE OU GAUCHE = RETOUR", 1, COL_DIM);
 }
 
 static void draw_update(const app_view_t *v)
 {
     const ota_view_t *o = &v->ota;
     char buf[48];
-    title("UPDATES");
-    gfx_text(16, 50, "INSTALLED", 1, COL_DIM);
+    title("MISES A JOUR");
+    gfx_text(16, 50, "INSTALLEE", 1, COL_DIM);
     version_text(16, 62, FW_VERSION, 2, COL_TEXT);
-    gfx_text(16, 88, "LATEST ON GITHUB", 1, COL_DIM);
+    gfx_text(16, 88, "DERNIERE SUR GITHUB", 1, COL_DIM);
     if (o->latest[0]) {
         version_text(16, 100, o->latest, 2, o->check == UPD_NEWER ? COL_ACCENT : COL_TEXT);
     } else {
@@ -248,7 +286,7 @@ static void draw_update(const app_view_t *v)
     const char *go = NULL; /* the right-hand button */
     switch (o->state) {
     case OTA_CHECKING:
-        msg = "CHECKING...";
+        msg = "RECHERCHE...";
         break;
     case OTA_DOWNLOADING:
     case OTA_REBOOTING: {
@@ -256,43 +294,43 @@ static void draw_update(const app_view_t *v)
         gfx_rrect(16, 140, 208, 16, 4, COL_LINE);
         gfx_rect(18, 142, 204 * pct / 100, 12, COL_ACCENT);
         if (o->state == OTA_REBOOTING) {
-            snprintf(buf, sizeof(buf), "RESTARTING...");
+            snprintf(buf, sizeof(buf), "REDEMARRAGE...");
         } else {
-            snprintf(buf, sizeof(buf), "DOWNLOADING %d%%", pct);
+            snprintf(buf, sizeof(buf), "TELECHARGEMENT %d%%", pct);
         }
         gfx_text_mid(SCREEN_W / 2, 164, buf, 1, COL_TEXT);
         break;
     }
     case OTA_FAILED:
-        snprintf(buf, sizeof(buf), "UPDATE FAILED: %s", o->reason);
+        snprintf(buf, sizeof(buf), "ECHEC MISE A JOUR : %s", o->reason);
         msg = buf;
         c = COL_O;
-        go = o->from_github ? "RETRY" : "CHECK";
+        go = o->from_github ? "REESSAYER" : "CHERCHER";
         break;
     case OTA_IDLE:
         switch (o->check) {
         case UPD_NEWER:
-            msg = o->has_asset ? "NEW VERSION! INSTALL IT?" : "NO FIRMWARE FILE IN RELEASE";
+            msg = o->has_asset ? "NOUVELLE VERSION ! L'INSTALLER ?" : "AUCUN FICHIER DANS LA VERSION";
             c = o->has_asset ? COL_ACCENT : COL_DIM;
-            go = o->has_asset ? "INSTALL" : "CHECK";
+            go = o->has_asset ? "INSTALLER" : "CHERCHER";
             break;
         case UPD_SAME:
         case UPD_OLDER: /* an older release is never offered: no downgrade */
-            snprintf(buf, sizeof(buf), "UP TO DATE (%s)", FW_VERSION);
+            snprintf(buf, sizeof(buf), "A JOUR (%s)", FW_VERSION);
             msg = buf;
             c = COL_ACCENT;
-            go = "CHECK";
+            go = "CHERCHER";
             break;
         case UPD_ERROR:
             if (strcmp(o->check_err, "repo_private") == 0 || strcmp(o->check_err, "no_release") == 0 ||
                 strcmp(o->check_err, "not_found") == 0) {
                 /* OTA_REPO_PRIVATE_TEXT / OTA_NO_RELEASE_TEXT, wrapped to the screen */
-                static const char *const PRIV[] = {"INTERNET OK, GITHUB REACHED", "GITHUB.COM/" GITHUB_REPO,
-                                                   "IS PRIVATE OR MISSING:", "MAKE THE REPO PUBLIC"};
-                static const char *const NOREL[] = {"INTERNET OK, GITHUB REACHED", "GITHUB.COM/" GITHUB_REPO,
-                                                    "IS PUBLIC BUT HAS", "NO PUBLISHED RELEASE"};
-                static const char *const NF[] = {"INTERNET OK, GITHUB REACHED", "GITHUB.COM/" GITHUB_REPO,
-                                                 "(REPO PRIVATE OR", "NO RELEASE PUBLISHED)"};
+                static const char *const PRIV[] = {"INTERNET OK, GITHUB JOINT", "GITHUB.COM/" GITHUB_REPO,
+                                                   "EST PRIVE OU ABSENT :", "RENDS LE DEPOT PUBLIC"};
+                static const char *const NOREL[] = {"INTERNET OK, GITHUB JOINT", "GITHUB.COM/" GITHUB_REPO,
+                                                    "EST PUBLIC MAIS SANS", "AUCUNE VERSION PUBLIEE"};
+                static const char *const NF[] = {"INTERNET OK, GITHUB JOINT", "GITHUB.COM/" GITHUB_REPO,
+                                                 "(DEPOT PRIVE OU", "AUCUNE VERSION PUBLIEE)"};
                 const char *const *t = strcmp(o->check_err, "repo_private") == 0 ? PRIV
                                        : strcmp(o->check_err, "no_release") == 0 ? NOREL
                                                                                   : NF;
@@ -300,14 +338,14 @@ static void draw_update(const app_view_t *v)
                     gfx_text_mid(SCREEN_W / 2, 126 + 13 * i, t[i], 1, COL_O);
                 }
             } else {
-                snprintf(buf, sizeof(buf), "CHECK FAILED: %s", o->check_err);
+                snprintf(buf, sizeof(buf), "ECHEC RECHERCHE : %s", o->check_err);
                 msg = buf;
                 c = COL_O;
             }
-            go = "RETRY";
+            go = "REESSAYER";
             break;
         case UPD_NONE:
-            go = "CHECK";
+            go = "CHERCHER";
             break;
         }
         break;
@@ -316,7 +354,7 @@ static void draw_update(const app_view_t *v)
         gfx_text_mid(SCREEN_W / 2, 146, msg, 1, c);
     }
     if (o->state != OTA_DOWNLOADING && o->state != OTA_REBOOTING) {
-        button(BTN_UPD_BACK, "BACK", COL_TEXT);
+        button(BTN_UPD_BACK, "RETOUR", COL_TEXT);
     }
     if (go) {
         button(BTN_UPD_GO, go, COL_ACCENT);
@@ -325,17 +363,17 @@ static void draw_update(const app_view_t *v)
 
 static void draw_confirm(void)
 {
-    gfx_text_mid(SCREEN_W / 2, 70, "LEAVE GAME?", 2, COL_TEXT);
-    gfx_text_mid(SCREEN_W / 2, 98, "THIS GAME WILL BE LOST", 1, COL_DIM);
-    button(BTN_NO, "NO", COL_TEXT);
-    button(BTN_YES, "YES", COL_ACCENT);
-    gfx_text_mid(SCREEN_W / 2, 226, "LEFT = KEEP PLAYING", 1, COL_DIM);
+    gfx_text_mid(SCREEN_W / 2, 70, "QUITTER ?", 2, COL_TEXT);
+    gfx_text_mid(SCREEN_W / 2, 98, "CETTE PARTIE SERA PERDUE", 1, COL_DIM);
+    button(BTN_NO, "NON", COL_TEXT);
+    button(BTN_YES, "OUI", COL_ACCENT);
+    gfx_text_mid(SCREEN_W / 2, 226, "GAUCHE = CONTINUER", 1, COL_DIM);
 }
 
 static void draw_settings(const app_view_t *v)
 {
     char buf[40];
-    title("SETTINGS");
+    title("PARAMETRES");
     int y0 = SET_Y0 - v->settings_scroll; /* screen y of list row 0 */
     gfx_clip_y(SET_Y0, LIST_Y1);
 
@@ -343,7 +381,7 @@ static void draw_settings(const app_view_t *v)
     bool silent = v->vol == 0;
     gfx_text(16, y0 + ROW_VOL + 14, "VOLUME", 2, COL_TEXT);
     if (silent) {
-        snprintf(buf, sizeof(buf), "OFF");
+        snprintf(buf, sizeof(buf), "COUPE");
     } else {
         snprintf(buf, sizeof(buf), "%d", v->vol);
     }
@@ -358,80 +396,80 @@ static void draw_settings(const app_view_t *v)
     gfx_text(16, y0 + ROW_WIFI + 19, "WI-FI", 2, COL_TEXT);
     switch (v->wifi) {
     case WIFI_CONNECTED:
-        snprintf(buf, sizeof(buf), "CONNECTED %s", v->ip);
+        snprintf(buf, sizeof(buf), "CONNECTE %s", v->ip);
         break;
     case WIFI_CONNECTING:
-        snprintf(buf, sizeof(buf), "CONNECTING...");
+        snprintf(buf, sizeof(buf), "CONNEXION...");
         break;
     case WIFI_FAILED:
-        snprintf(buf, sizeof(buf), "NOT CONNECTED");
+        snprintf(buf, sizeof(buf), "NON CONNECTE");
         break;
     case WIFI_SETUP:
-        snprintf(buf, sizeof(buf), "SETUP RUNNING");
+        snprintf(buf, sizeof(buf), "CONFIGURATION EN COURS");
         break;
     default:
-        snprintf(buf, sizeof(buf), "NOT SET UP");
+        snprintf(buf, sizeof(buf), "NON CONFIGURE");
         break;
     }
     gfx_text(16, y0 + ROW_WIFI + 58, buf, 1, v->wifi == WIFI_CONNECTED ? COL_ACCENT : COL_DIM);
-    button(at(BTN_SETUP, SET_Y0, v->settings_scroll), "SET UP", COL_TEXT);
+    button(at(BTN_SETUP, SET_Y0, v->settings_scroll), "CONFIG", COL_TEXT);
     gfx_rect(0, y0 + ROW_KEYS - 1, SCREEN_W, 1, COL_LINE);
 
-    gfx_text(16, y0 + ROW_KEYS + 12, "BUTTONS", 2, COL_TEXT);
-    gfx_text(16, y0 + ROW_KEYS + 36, "LEFT: BACK", 1, COL_DIM);
-    gfx_text(16, y0 + ROW_KEYS + 50, "HOLD LEFT + RIGHT: SETTINGS", 1, COL_DIM);
-    gfx_text(16, y0 + ROW_KEYS + 64, "HOLD MIDDLE: POWER OFF", 1, COL_DIM);
+    gfx_text(16, y0 + ROW_KEYS + 12, "BOUTONS", 2, COL_TEXT);
+    gfx_text(16, y0 + ROW_KEYS + 36, "GAUCHE : RETOUR", 1, COL_DIM);
+    gfx_text(16, y0 + ROW_KEYS + 50, "GAUCHE + DROITE 3 S : PARAMETRES", 1, COL_DIM);
+    gfx_text(16, y0 + ROW_KEYS + 64, "MILIEU 3 S : ETEINDRE", 1, COL_DIM);
     gfx_rect(0, y0 + ROW_UPDATE - 1, SCREEN_W, 1, COL_LINE);
 
-    gfx_text(16, y0 + ROW_UPDATE + 19, "UPDATES", 2, COL_TEXT);
-    button(at(BTN_CHECK, SET_Y0, v->settings_scroll), "CHECK", COL_TEXT);
-    gfx_text(16, y0 + ROW_UPDATE + 52, "CHECK FOR UPDATES ON GITHUB", 1, COL_DIM);
+    gfx_text(16, y0 + ROW_UPDATE + 19, "LOGICIEL", 2, COL_TEXT);
+    button(at(BTN_CHECK, SET_Y0, v->settings_scroll), "MAJ ?", COL_TEXT);
+    gfx_text(16, y0 + ROW_UPDATE + 52, "CHERCHER UNE MISE A JOUR SUR GITHUB", 1, COL_DIM);
     gfx_rect(0, y0 + ROW_ABOUT - 1, SCREEN_W, 1, COL_LINE);
 
     gfx_text(16, y0 + ROW_ABOUT + 12, "VERSION", 1, COL_DIM);
     version_text(16, y0 + ROW_ABOUT + 26, FW_VERSION, 2, COL_TEXT);
 
     gfx_clip_y(0, SCREEN_H);
-    gfx_text_right(224, 226, "LEFT = BACK", 1, COL_DIM);
+    gfx_text_right(224, 226, "GAUCHE = RETOUR", 1, COL_DIM);
 }
 
 static void draw_wifi(const app_view_t *v)
 {
     char buf[40];
-    title("WI-FI SETUP");
-    gfx_text(16, 54, "1. ON YOUR PHONE, JOIN", 1, COL_DIM);
+    title("CONFIG WI-FI");
+    gfx_text(16, 54, "1. SUR TON TELEPHONE, REJOINS", 1, COL_DIM);
     gfx_text(16, 70, v->ap_name, 2, COL_ACCENT);
-    gfx_text(16, 100, "2. THE SETUP PAGE OPENS", 1, COL_DIM);
-    gfx_text(16, 112, "   (OR VISIT 192.168.4.1)", 1, COL_DIM);
+    gfx_text(16, 100, "2. LA PAGE DE CONFIG S'OUVRE", 1, COL_DIM);
+    gfx_text(16, 112, "   (OU VA SUR 192.168.4.1)", 1, COL_DIM);
 
     const char *st;
     uint16_t c = COL_TEXT;
     buf[0] = '\0';
     switch (v->wifi) {
     case WIFI_SETUP:
-        st = "WAITING...";
+        st = "EN ATTENTE...";
         c = COL_DIM;
         break;
     case WIFI_CONNECTING:
-        st = "CONNECTING...";
+        st = "CONNEXION...";
         break;
     case WIFI_CONNECTED:
-        st = "CONNECTED";
+        st = "CONNECTE";
         c = COL_ACCENT;
         snprintf(buf, sizeof(buf), "IP %s", v->ip);
         break;
     case WIFI_FAILED:
-        st = "NOT CONNECTED";
-        snprintf(buf, sizeof(buf), "CHECK THE PASSWORD, TRY AGAIN");
+        st = "NON CONNECTE";
+        snprintf(buf, sizeof(buf), "VERIFIE LE MOT DE PASSE, REESSAIE");
         break;
     default:
-        st = "STOPPED";
+        st = "ARRETE";
         c = COL_DIM;
         break;
     }
     gfx_text_mid(SCREEN_W / 2, 142, st, 2, c);
     gfx_text_mid(SCREEN_W / 2, 164, buf, 1, COL_DIM);
-    button(BTN_DONE, v->wifi == WIFI_SETUP ? "CANCEL" : "DONE", COL_TEXT);
+    button(BTN_DONE, v->wifi == WIFI_SETUP ? "ANNULER" : "TERMINE", COL_TEXT);
 }
 
 void ui_render(const app_view_t *v)
@@ -454,8 +492,8 @@ void ui_render(const app_view_t *v)
         draw_wifi(v);
         break;
     case SCR_OFF:
-        gfx_text_mid(SCREEN_W / 2, 100, "POWERING OFF", 2, COL_TEXT);
-        gfx_text_mid(SCREEN_W / 2, 130, v->off_idle ? "NO INPUT FOR 60 S" : "RELEASE THE BUTTON", 1, COL_DIM);
+        gfx_text_mid(SCREEN_W / 2, 100, "EXTINCTION", 2, COL_TEXT);
+        gfx_text_mid(SCREEN_W / 2, 130, v->off_idle ? "RIEN TOUCHE DEPUIS 60 S" : "RELACHE LE BOUTON", 1, COL_DIM);
         break;
     case SCR_RULES:
         draw_rules(v);

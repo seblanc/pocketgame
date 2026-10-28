@@ -283,7 +283,7 @@ static void steady_draw(const void *st, int preview)
     gfx_text_right(224, INFO_Y, line, 1, COL_O);
     if (g->r.status == GAME_PLAYING) {
         if (g->run == STEADY_WAIT) {
-            snprintf(line, sizeof(line), "TAP TO START");
+            snprintf(line, sizeof(line), "TOUCHE = DEPART");
         } else {
             secs(line, sizeof(line), (int32_t)g->ms);
         }
@@ -301,7 +301,7 @@ static void steady_icon(int x, int y, int s)
 
 const game_def_t STEADY_HAND = {
     .id = "steady",
-    .title = "STEADY HAND",
+    .title = "MAIN STABLE",
     .verb = "hold",
     .new_round = steady_new_round,
     .print = steady_print,

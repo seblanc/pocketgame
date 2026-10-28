@@ -1,6 +1,7 @@
 #include "display.h"
 #include <math.h>
 #include <stdbool.h>
+#include <stdio.h>
 #include <string.h>
 #include "board.h"
 #include "driver/gpio.h"
@@ -172,8 +173,39 @@ void gfx_rrect(int x, int y, int w, int h, int r, uint16_t c)
 
 int gfx_text_w(const char *s, int scale) { return *s ? (int)strlen(s) * 6 * scale - scale : 0; }
 
+static char *s_cap;  /* the "text" capture (display task only) */
+static size_t s_cap_n, s_cap_len;
+static bool s_cap_mute;
+
+void gfx_text_capture(char *buf, size_t n)
+{
+    s_cap = buf;
+    s_cap_n = n;
+    s_cap_len = 0;
+    s_cap_mute = false;
+    if (buf && n) {
+        buf[0] = '\0';
+    }
+}
+
+void gfx_text_mute(bool on) { s_cap_mute = on; }
+
+void gfx_text_note(const char *s)
+{
+    if (!s_cap || s_cap_mute || !*s || s_cap_len + 1 >= s_cap_n) {
+        return;
+    }
+    if (s_cap_len) {
+        strlcpy(s_cap + s_cap_len, " | ", s_cap_n - s_cap_len);
+        s_cap_len = strlen(s_cap);
+    }
+    strlcpy(s_cap + s_cap_len, s, s_cap_n - s_cap_len);
+    s_cap_len = strlen(s_cap);
+}
+
 void gfx_text(int x, int y, const char *s, int scale, uint16_t c)
 {
+    gfx_text_note(s);
     for (; *s; s++, x += 6 * scale) {
         char ch = *s;
         if (ch >= 'a' && ch <= 'z') {

@@ -31,8 +31,10 @@ static const note_t TUNE_TICK[] = {{990, 32, true}, {0, 0}}; /* slider and scrol
 static const note_t TUNE_BOOM[] = {{196, 70}, {131, 90}, {98, 120}, {65, 360}, {0, 0}}; /* Hot Potato */
 static const note_t TUNE_COIN[] = {{988, 45}, {1319, 110}, {0, 0}};             /* Coin Platformer: a pickup */
 static const note_t TUNE_END[] = {{784, 90}, {587, 90}, {392, 200}, {0, 0}};  /* a timed run is over */
+/* Defi Secousse: enough shaking, a dare comes up */
+static const note_t TUNE_DARE[] = {{392, 70}, {523, 70}, {659, 70}, {784, 70}, {1047, 70}, {784, 60}, {1047, 220}, {0, 0}};
 static const note_t *const TUNES[] = {TUNE_X,    TUNE_O,    TUNE_BAD,  TUNE_WIN, TUNE_DRAW,
-                                      TUNE_NEW,  TUNE_TICK, TUNE_BOOM, TUNE_COIN, TUNE_END};
+                                      TUNE_NEW,  TUNE_TICK, TUNE_BOOM, TUNE_COIN, TUNE_END, TUNE_DARE};
 
 static QueueHandle_t s_q;
 static i2s_chan_handle_t s_tx;

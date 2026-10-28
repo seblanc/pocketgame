@@ -205,15 +205,15 @@ static void potato_draw(const void *st, int preview)
         gfx_ring(CX, CY, 70, 3, c);
         draw_potato(CX, CY, 52);
         bool can_pass = g->held_ms >= POTATO_HOLD_MS;
-        gfx_text_mid(CX, 204, can_pass ? "TAP TO PASS" : "HOLD...", 2, can_pass ? COL_TEXT : COL_DIM);
-        gfx_text_mid(CX, 226, g->skip_used[g->r.turn] ? "SKIP USED" : "SHAKE = SKIP (ONCE)", 1, COL_DIM);
+        gfx_text_mid(CX, 204, can_pass ? "TOUCHE : PASSE" : "GARDE-LA...", 2, can_pass ? COL_TEXT : COL_DIM);
+        gfx_text_mid(CX, 226, g->skip_used[g->r.turn] ? "SAUT DEJA UTILISE" : "SECOUE = SAUTER (1 FOIS)", 1, COL_DIM);
     } else {
         gfx_ring(CX, CY, 70, 3, COL_ACCENT);
-        gfx_text_mid(CX, CY - 7, "BOOM!", 2, COL_TEXT);
+        gfx_text_mid(CX, CY - 7, "BOUM !", 2, COL_TEXT);
         char b[24];
-        snprintf(b, sizeof(b), "%c HELD IT", game_mark_char(g->loser));
+        snprintf(b, sizeof(b), "%c L'AVAIT", game_mark_char(g->loser));
         gfx_text_mid(CX, 204, b, 2, g->loser == CELL_X ? COL_X : COL_O);
-        gfx_text_mid(CX, 226, "TAP FOR A NEW ROUND", 1, COL_DIM);
+        gfx_text_mid(CX, 226, "TOUCHE : NOUVELLE MANCHE", 1, COL_DIM);
     }
 }
 
@@ -224,17 +224,17 @@ static void potato_icon(int x, int y, int s)
 }
 
 static const char *const RULES[] = {
-    "A HIDDEN FUSE BURNS FOR 8 TO 20 S.",
-    "NOBODY KNOWS WHEN IT GOES BOOM.",
+    "UNE MECHE CACHEE BRULE 8 A 20 S.",
+    "PERSONNE NE SAIT QUAND CA FAIT BOUM.",
     "",
-    "HOLD THE BOARD AT LEAST 2 S,",
-    "THEN TAP PASS TO HAND IT ON.",
+    "GARDE LA CONSOLE AU MOINS 2 S,",
+    "PUIS TOUCHE L'ECRAN POUR PASSER.",
     "",
-    "IN A HURRY? SHAKE IT TO SKIP:",
-    "ONE SKIP PER PLAYER PER ROUND.",
+    "PRESSE ? SECOUE-LA POUR SAUTER :",
+    "UN SAUT PAR JOUEUR ET PAR MANCHE.",
     "",
-    "WHOEVER HOLDS THE BOARD AT",
-    "BOOM LOSES THE ROUND.",
+    "CELUI QUI TIENT LA CONSOLE AU",
+    "BOUM PERD LA MANCHE.",
     NULL,
 };
 _Static_assert(POTATO_FUSE_MIN_MS == 8000 && POTATO_FUSE_MAX_MS == 20000 && POTATO_HOLD_MS == 2000,
@@ -242,7 +242,7 @@ _Static_assert(POTATO_FUSE_MIN_MS == 8000 && POTATO_FUSE_MAX_MS == 20000 && POTA
 
 const game_def_t HOT_POTATO = {
     .id = "potato",
-    .title = "HOT POTATO",
+    .title = "PATATE CHAUDE",
     .verb = "pass",
     .new_round = potato_new_round,
     .print = potato_print,

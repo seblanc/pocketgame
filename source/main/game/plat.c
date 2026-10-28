@@ -490,13 +490,13 @@ static void plat_banner(const void *st, char *buf, int n, uint8_t *mark)
 {
     const plat_t *g = st;
     if (g->r.status == GAME_WIN) {
-        snprintf(buf, n, "%c WINS", game_mark_char(g->r.winner));
+        snprintf(buf, n, "%c GAGNE", game_mark_char(g->r.winner));
         *mark = g->r.winner;
     } else if (g->r.status == GAME_DRAW) {
-        snprintf(buf, n, "DRAW");
+        snprintf(buf, n, "EGALITE");
         *mark = CELL_EMPTY;
     } else if (g->run == PLAT_WAIT) {
-        snprintf(buf, n, "%c READY", game_mark_char(g->r.turn));
+        snprintf(buf, n, "%c PRET", game_mark_char(g->r.turn));
         *mark = g->r.turn;
     } else {
         /* the countdown */
@@ -519,7 +519,7 @@ static void draw_final(const plat_t *g)
     uint16_t edge = g->r.status == GAME_WIN ? (g->r.winner == CELL_X ? COL_X : COL_O) : COL_TEXT;
     gfx_rect(x0, y0, w, h, COL_BG);
     gfx_rrect(x0, y0, w, h, 6, edge);
-    gfx_text_mid(SCREEN_W / 2, y0 + 10, "FINAL SCORE", 1, COL_DIM);
+    gfx_text_mid(SCREEN_W / 2, y0 + 10, "SCORE FINAL", 1, COL_DIM);
     char buf[24];
     const uint8_t who[2] = {CELL_X, CELL_O};
     for (int i = 0; i < 2; i++) {
@@ -528,19 +528,19 @@ static void draw_final(const plat_t *g)
         uint16_t c = p == CELL_X ? COL_X : COL_O;
         snprintf(buf, sizeof(buf), "%c %d", game_mark_char(p), g->points[p]);
         gfx_text_mid(cx, y0 + 26, buf, 3, c);
-        snprintf(buf, sizeof(buf), "%d COINS", g->coins[p]);
+        snprintf(buf, sizeof(buf), "%d PIECES", g->coins[p]);
         gfx_text_mid(cx, y0 + 54, buf, 1, COL_TEXT);
         /* the time bonus: only a run that took every coin has seconds left */
-        snprintf(buf, sizeof(buf), "+%dS LEFT", g->points[p] - g->coins[p] * PLAT_COIN_PTS);
+        snprintf(buf, sizeof(buf), "+%dS RESTANTES", g->points[p] - g->coins[p] * PLAT_COIN_PTS);
         gfx_text_mid(cx, y0 + 64, buf, 1, COL_DIM);
     }
     if (g->r.status == GAME_WIN) {
-        snprintf(buf, sizeof(buf), "%c WINS!", game_mark_char(g->r.winner));
+        snprintf(buf, sizeof(buf), "%c GAGNE !", game_mark_char(g->r.winner));
     } else {
-        snprintf(buf, sizeof(buf), "DRAW");
+        snprintf(buf, sizeof(buf), "EGALITE");
     }
     gfx_text_mid(SCREEN_W / 2, y0 + 82, buf, 2, edge);
-    gfx_text_mid(SCREEN_W / 2, y0 + 108, "RIGHT: NEW ROUND", 1, COL_DIM);
+    gfx_text_mid(SCREEN_W / 2, y0 + 108, "DROITE : NOUVELLE MANCHE", 1, COL_DIM);
 }
 
 /* before a run: how to play, with an arrow up to the RIGHT key on the top edge */
@@ -551,17 +551,17 @@ static void draw_howto(const plat_t *g)
     uint16_t c = g->r.turn == CELL_X ? COL_X : COL_O;
     gfx_rect(x0, y0, w, h, COL_BG);
     gfx_rrect(x0, y0, w, h, 6, c);
-    gfx_text_mid(x0 + w / 2, y0 + 10, "RIGHT = JUMP", 2, COL_ACCENT);
-    gfx_text_mid(x0 + w / 2, y0 + 34, "TILT TO WALK", 1, COL_TEXT);
-    gfx_text_mid(x0 + w / 2, y0 + 50, "COIN 10 PTS", 1, COL_COIN);
-    gfx_text_mid(x0 + w / 2, y0 + 60, "+1 PT PER SECOND LEFT", 1, COL_COIN);
-    gfx_text_mid(x0 + w / 2, y0 + 78, "PRESS RIGHT TO START", 1, c);
-    /* from the box's "RIGHT = JUMP" line over to the corner, then up to the key */
+    gfx_text_mid(x0 + w / 2, y0 + 10, "DROITE = SAUT", 2, COL_ACCENT);
+    gfx_text_mid(x0 + w / 2, y0 + 34, "PENCHE POUR MARCHER", 1, COL_TEXT);
+    gfx_text_mid(x0 + w / 2, y0 + 50, "PIECE 10 PTS", 1, COL_COIN);
+    gfx_text_mid(x0 + w / 2, y0 + 60, "+1 PT PAR SECONDE RESTANTE", 1, COL_COIN);
+    gfx_text_mid(x0 + w / 2, y0 + 78, "APPUIE SUR DROITE", 1, c);
+    /* from the box's "DROITE = SAUT" line over to the corner, then up to the key */
     gfx_line(x0 + w, y0 + 17, ax, y0 + 17, 3, COL_ACCENT);
     gfx_line(ax, y0 + 17, ax, 34, 3, COL_ACCENT);
     gfx_line(ax, 32, ax - 9, 43, 3, COL_ACCENT);
     gfx_line(ax, 32, ax + 9, 43, 3, COL_ACCENT);
-    gfx_text_mid(ax, y0 + 24, "JUMP", 1, COL_ACCENT);
+    gfx_text_mid(ax, y0 + 24, "SAUT", 1, COL_ACCENT);
 }
 
 static void plat_draw(const void *st, int preview)
@@ -610,7 +610,7 @@ static void plat_draw(const void *st, int preview)
     } else {
         if (g->run == PLAT_WAIT) {
             draw_howto(g);
-            snprintf(line, sizeof(line), "RIGHT TO START");
+            snprintf(line, sizeof(line), "DROITE = DEPART");
         } else {
             snprintf(line, sizeof(line), "%d/%d  %luS", popcount16(g->taken), PLAT_NCOINS,
                      (unsigned long)((PLAT_LIMIT_MS - g->ms + 999) / 1000));
@@ -633,7 +633,7 @@ static void plat_icon(int x, int y, int s)
 
 const game_def_t COIN_PLATFORMER = {
     .id = "plat",
-    .title = "PLATFORMER",
+    .title = "CHASSE AUX PIECES",
     .verb = "level",
     .new_round = plat_new_round,
     .print = plat_print,

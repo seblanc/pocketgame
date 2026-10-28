@@ -267,7 +267,7 @@ static void c4_icon(int x, int y, int s)
 
 const game_def_t CONNECT4 = {
     .id = "c4",
-    .title = "CONNECT 4",
+    .title = "PUISSANCE 4",
     .verb = "drop",
     .new_round = c4_new_round,
     .print = c4_print,
