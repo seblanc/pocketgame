@@ -1314,7 +1314,7 @@ static void touch_task(void *arg)
 
 static void motion_task(void *arg)
 {
-    float fx = 0, fy = 0, ref_x = 0, ref_y = 0;
+    float fx = 0, fy = 0, sx = 0, ref_x = 0, ref_y = 0;
     uint32_t last = now_ms(), shake_at = 0;
     for (int tick = 0;; tick++) {
         vTaskDelay(pdMS_TO_TICKS(MOTION_MS));
@@ -1327,6 +1327,8 @@ static void motion_task(void *arg)
         }
         fx += (tx - fx) * 0.35f;
         fy += (ty - fy) * 0.35f;
+        /* the steering game (Coin Platformer) follows the tilt more quickly */
+        sx += (tx - sx) * 0.7f;
         float mag = sqrtf((float)ax * ax + (float)ay * ay + (float)az * az);
         bool shake = false;
         if (live && fabsf(mag - 1000) > SHAKE_MG && now - shake_at > SHAKE_QUIET_MS) {
@@ -1340,7 +1342,7 @@ static void motion_task(void *arg)
         game_event_t ev = GEV_NONE;
         bool running = false, timed = g->timed;
         if (on) {
-            motion_t m = {.tx = (int)fx, .ty = (int)fy, .shake = shake, .dt_ms = dt > 200 ? 200 : dt};
+            motion_t m = {.tx = (int)(g->steer ? sx : fx), .ty = (int)fy, .shake = shake, .dt_ms = dt > 200 ? 200 : dt};
             if (shake) {
                 out("SHAKE mg=%d", (int)mag);
             }

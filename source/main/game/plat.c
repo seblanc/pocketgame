@@ -183,8 +183,9 @@ static bool move(plat_t *g, float walk, float dt)
     return false;
 }
 
-#define TILT_DEAD 90  /* mg: about 5 degrees */
-#define TILT_FULL 420 /* mg: about 25 degrees */
+#define TILT_DEAD 55  /* mg: about 3 degrees */
+#define TILT_FULL 260 /* mg: about 15 degrees */
+#define TILT_MIN 0.3f /* walk share just past the dead zone: no sluggish creep */
 
 float plat_tilt_walk(int tx)
 {
@@ -192,7 +193,7 @@ float plat_tilt_walk(int tx)
     if (a <= TILT_DEAD) {
         return 0;
     }
-    float w = clampf((float)(a - TILT_DEAD) / (TILT_FULL - TILT_DEAD), 0, 1);
+    float w = TILT_MIN + (1 - TILT_MIN) * clampf((float)(a - TILT_DEAD) / (TILT_FULL - TILT_DEAD), 0, 1);
     return tx < 0 ? -w : w;
 }
 

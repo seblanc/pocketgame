@@ -73,7 +73,8 @@ bool plat_jump(plat_t *g);
  * player or ends the round. */
 plat_ev_t plat_step(plat_t *g, float walk, uint32_t *dt_ms);
 /* the walk speed for a screen tilt tx in mg (> 0 right edge lower): none in a small
- * dead zone around level, then growing to full speed at about 25 degrees. The x
+ * dead zone around level (about 3 degrees), then from 30 % growing to full speed at
+ * about 15 degrees. The x
  * tilt is the same whether the board lies flat or is held upright facing the player. */
 float plat_tilt_walk(int tx);
 /* sim autoplay: the walk direction and whether to jump for the next step, along a
