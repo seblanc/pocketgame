@@ -193,7 +193,16 @@ void gfx_rrect(int x, int y, int w, int h, int r, uint16_t c)
     gfx_arc(x + r, y + h - r, rr, 1, 90, 180, c);
 }
 
-int gfx_text_w(const char *s, int scale) { return *s ? (int)strlen(s) * 6 * scale - scale : 0; }
+static bool is_mark(char ch) { return ch == TXT_A[0] || ch == TXT_B[0] || ch == TXT_END[0]; }
+
+int gfx_text_w(const char *s, int scale)
+{
+    int n = 0;
+    for (; *s; s++) {
+        n += !is_mark(*s);
+    }
+    return n ? n * 6 * scale - scale : 0;
+}
 
 static char *s_cap;  /* the "text" capture (display task only) */
 static size_t s_cap_n, s_cap_len;
@@ -221,15 +230,25 @@ void gfx_text_note(const char *s)
         strlcpy(s_cap + s_cap_len, " | ", s_cap_n - s_cap_len);
         s_cap_len = strlen(s_cap);
     }
-    strlcpy(s_cap + s_cap_len, s, s_cap_n - s_cap_len);
-    s_cap_len = strlen(s_cap);
+    for (; *s && s_cap_len + 1 < s_cap_n; s++) {
+        if (!is_mark(*s)) {
+            s_cap[s_cap_len++] = *s; /* colour marks are not text */
+        }
+    }
+    s_cap[s_cap_len] = '\0';
 }
 
 void gfx_text(int x, int y, const char *s, int scale, uint16_t c)
 {
     gfx_text_note(s);
+    uint16_t base = c;
     for (; *s; s++, x += 6 * scale) {
         char ch = *s;
+        if (is_mark(ch)) {
+            c = ch == TXT_A[0] ? COL_X : ch == TXT_B[0] ? COL_O : base;
+            x -= 6 * scale;
+            continue;
+        }
         if (ch >= 'a' && ch <= 'z') {
             ch -= 'a' - 'A';
         }

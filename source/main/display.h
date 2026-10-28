@@ -40,7 +40,12 @@ void gfx_disc(float cx, float cy, float r, uint16_t c);
 /* a disc cut into n equal wedges, wedge k from a0 + k * 360 / n degrees, coloured
  * cols[k % n_cols] (the Roue des defis) */
 void gfx_wheel(float cx, float cy, float r, int n, float a0, const uint16_t *cols, int n_cols);
-/* 5x7 font, upper case only (lower case is drawn as upper case) */
+/* 5x7 font, upper case only (lower case is drawn as upper case). Inside a string
+ * TXT_A / TXT_B switch to player A's / B's colour and TXT_END back to c: player
+ * names are coloured, the rest of a line stays white. */
+#define TXT_A "\x01"
+#define TXT_B "\x02"
+#define TXT_END "\x03"
 int gfx_text_w(const char *s, int scale);
 void gfx_text(int x, int y, const char *s, int scale, uint16_t c);
 void gfx_text_mid(int cx, int y, const char *s, int scale, uint16_t c);

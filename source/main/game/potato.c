@@ -210,7 +210,7 @@ static void draw_boom(void)
     }
     gfx_disc(CX, CY, 60, COL_FIRE);
     gfx_disc(CX, CY, 44, COL_FLAME);
-    gfx_text_mid(CX, CY - 10, "BOUM", 3, RGB(110, 0, 0));
+    gfx_text_mid(CX, CY - 10, "BOUM", 3, RGB(0, 0, 0));
 }
 
 static void potato_draw(const void *st, int preview)
@@ -236,7 +236,9 @@ static void potato_draw(const void *st, int preview)
         uint8_t l = g->loser;
         gfx_rect(0, TOP, SCREEN_W, SCREEN_H - TOP, l == CELL_X ? COL_X_TINT : COL_O_TINT);
         draw_boom();
-        snprintf(b, sizeof(b), "JOUEUR %c A PERDU", game_player_char(l));
+        /* a dark strip so the loser's name keeps its own colour readable on the tint */
+        gfx_rect(0, 193, SCREEN_W, 28, COL_BG);
+        snprintf(b, sizeof(b), "%s A PERDU", game_player_name(l));
         gfx_text_mid(CX, 200, b, 2, COL_TEXT);
         gfx_text_mid(CX, 226, "TOUCHE : NOUVELLE MANCHE", 1, COL_TEXT);
     }

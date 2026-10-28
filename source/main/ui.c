@@ -218,12 +218,13 @@ static void draw_game(const app_view_t *v)
         return;
     }
     char buf[16];
-    snprintf(buf, sizeof(buf), "A %d", s->wins_x > 99 ? 99 : s->wins_x);
-    gfx_text(8, 13, buf, 2, COL_X);
-    snprintf(buf, sizeof(buf), "B %d", s->wins_o > 99 ? 99 : s->wins_o);
-    gfx_text_right(232, 13, buf, 2, COL_O);
+    snprintf(buf, sizeof(buf), "%s %d", game_player_tag(CELL_X), s->wins_x > 99 ? 99 : s->wins_x);
+    gfx_text(8, 13, buf, 2, COL_TEXT);
+    snprintf(buf, sizeof(buf), "%s %d", game_player_tag(CELL_O), s->wins_o > 99 ? 99 : s->wins_o);
+    gfx_text_right(232, 13, buf, 2, COL_TEXT);
 
-    /* turn banner, filled in the colour of the player it is about */
+    /* turn banner, filled and outlined in the colour of the player it is about; its
+     * text is white with only the player's letter coloured */
     uint16_t tc, fill;
     if (GAMES[v->game_idx]->banner) {
         uint8_t mark = CELL_EMPTY;
@@ -231,7 +232,7 @@ static void draw_game(const app_view_t *v)
         tc = mark == CELL_EMPTY ? COL_TEXT : player_col(mark);
         fill = mark == CELL_EMPTY ? COL_LINE : player_dim(mark);
     } else if (g->status == GAME_WIN) {
-        snprintf(buf, sizeof(buf), "%c GAGNE", game_player_char(g->winner));
+        snprintf(buf, sizeof(buf), "%s GAGNE", game_player_tag(g->winner));
         tc = player_col(g->winner);
         fill = player_dim(g->winner);
     } else if (g->status == GAME_DRAW) {
@@ -239,7 +240,7 @@ static void draw_game(const app_view_t *v)
         tc = COL_TEXT;
         fill = COL_LINE;
     } else {
-        snprintf(buf, sizeof(buf), g->moves == 0 ? "%c COMMENCE" : "TOUR DE %c", game_player_char(g->turn));
+        snprintf(buf, sizeof(buf), g->moves == 0 ? "%s COMMENCE" : "TOUR DE %s", game_player_tag(g->turn));
         tc = player_col(g->turn);
         fill = player_dim(g->turn);
     }
@@ -247,7 +248,7 @@ static void draw_game(const app_view_t *v)
     gfx_rect(b.x + 2, b.y + 1, b.w - 4, b.h - 2, fill);
     gfx_rect(b.x + 1, b.y + 2, b.w - 2, b.h - 4, fill);
     gfx_rrect(b.x, b.y, b.w, b.h, 4, tc);
-    gfx_text_mid(b.x + b.w / 2, b.y + (b.h - 14) / 2, buf, 2, tc);
+    gfx_text_mid(b.x + b.w / 2, b.y + (b.h - 14) / 2, buf, 2, COL_TEXT);
 
     GAMES[v->game_idx]->draw(s->st.bytes, -1);
     if (GAMES[v->game_idx]->rules) {
@@ -304,7 +305,7 @@ static void draw_update(const app_view_t *v)
     case OTA_FAILED:
         snprintf(buf, sizeof(buf), "ECHEC MISE A JOUR : %s", o->reason);
         msg = buf;
-        c = COL_O;
+        c = COL_TEXT;
         go = o->from_github ? "REESSAYER" : "CHERCHER";
         break;
     case OTA_IDLE:
@@ -335,12 +336,12 @@ static void draw_update(const app_view_t *v)
                                        : strcmp(o->check_err, "no_release") == 0 ? NOREL
                                                                                   : NF;
                 for (int i = 0; i < 4; i++) {
-                    gfx_text_mid(SCREEN_W / 2, 126 + 13 * i, t[i], 1, COL_O);
+                    gfx_text_mid(SCREEN_W / 2, 126 + 13 * i, t[i], 1, COL_TEXT);
                 }
             } else {
                 snprintf(buf, sizeof(buf), "ECHEC RECHERCHE : %s", o->check_err);
                 msg = buf;
-                c = COL_O;
+                c = COL_TEXT; /* red and blue are kept for the players */
             }
             go = "REESSAYER";
             break;

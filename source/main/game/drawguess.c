@@ -260,8 +260,6 @@ static const box_t BTN_DONE = {162, 190, 74, 46};
 #define CHOICE_GAP 3
 static box_t choice_box(int i) { return (box_t){8, CHOICE_Y0 + i * (CHOICE_H + CHOICE_GAP), 224, CHOICE_H}; }
 
-static uint16_t mark_col(uint8_t m) { return m == CELL_X ? COL_X : COL_O; }
-
 static uint8_t guesser(const dg_t *g) { return game_other(g->r.starter); }
 
 static const char *word_of(int i) { return DG_WORDS[i]; }
@@ -503,18 +501,18 @@ static void dg_banner(const void *st, char *buf, int n, uint8_t *mark)
     *mark = g->r.turn;
     switch (g->phase) {
     case DG_WORD:
-        snprintf(buf, n, "%c DESSINE", game_player_char(g->r.starter));
+        snprintf(buf, n, "%s DESSINE", game_player_tag(g->r.starter));
         break;
     case DG_DRAW:
-        snprintf(buf, n, "%c: %u S", game_player_char(g->r.starter), left_s(g));
+        snprintf(buf, n, "%s: %u S", game_player_tag(g->r.starter), left_s(g));
         break;
     case DG_HANDOVER:
     case DG_GUESS:
-        snprintf(buf, n, "%c DEVINE", game_player_char(guesser(g)));
+        snprintf(buf, n, "%s DEVINE", game_player_tag(guesser(g)));
         break;
     default:
         if (g->r.status == GAME_WIN) {
-            snprintf(buf, n, "%c TROUVE", game_player_char(g->r.winner));
+            snprintf(buf, n, "%s TROUVE", game_player_tag(g->r.winner));
             *mark = g->r.winner;
         } else {
             snprintf(buf, n, "RATE");
@@ -577,13 +575,13 @@ static void dg_draw(const void *st, int preview)
     uint8_t drawer = g->r.starter, other = guesser(g);
     switch (g->phase) {
     case DG_WORD:
-        snprintf(b, sizeof(b), "JOUEUR %c, TON MOT SECRET :", game_player_char(drawer));
-        gfx_text_mid(CX, 54, b, 1, mark_col(drawer));
-        big_word(76, word_of(g->word), COL_ACCENT);
-        snprintf(b, sizeof(b), "JOUEUR %c NE DOIT PAS LE VOIR !", game_player_char(other));
-        gfx_text_mid(CX, 120, b, 1, COL_DIM);
+        snprintf(b, sizeof(b), "%s, TON MOT SECRET :", game_player_name(drawer));
+        gfx_text_mid(CX, 54, b, 1, COL_TEXT);
+        big_word(76, word_of(g->word), COL_TEXT);
+        snprintf(b, sizeof(b), "%s NE DOIT PAS LE VOIR !", game_player_name(other));
+        gfx_text_mid(CX, 120, b, 1, COL_TEXT);
         snprintf(b, sizeof(b), "DESSINE-LE EN %d S", DG_LIMIT_MS / 1000);
-        gfx_text_mid(CX, 138, b, 1, COL_DIM);
+        gfx_text_mid(CX, 138, b, 1, COL_TEXT);
         btn((box_t){40, 166, 160, 48}, "COMMENCER", 2, COL_TEXT);
         break;
     case DG_DRAW: {
@@ -598,9 +596,9 @@ static void dg_draw(const void *st, int preview)
     }
     case DG_HANDOVER:
         /* three lines in large letters */
-        gfx_text_mid(CX, 98, "PASSE LA", 2, mark_col(other));
-        gfx_text_mid(CX, 124, "CONSOLE ET", 2, mark_col(other));
-        gfx_text_mid(CX, 150, "TOUCHE L'ECRAN", 2, mark_col(other));
+        gfx_text_mid(CX, 98, "PASSE LA", 2, COL_TEXT);
+        gfx_text_mid(CX, 124, "CONSOLE ET", 2, COL_TEXT);
+        gfx_text_mid(CX, 150, "TOUCHE L'ECRAN", 2, COL_TEXT);
         break;
     case DG_GUESS: {
         float k = (float)GUESS_H / DG_CANVAS_H;
@@ -614,21 +612,21 @@ static void dg_draw(const void *st, int preview)
     }
     default: {
         bool right = g->r.status == GAME_WIN;
-        gfx_text_mid(CX, 50, right ? "BRAVO !" : "RATE", 3, right ? COL_ACCENT : COL_O);
-        gfx_text_mid(CX, 84, "LE MOT ETAIT", 1, COL_DIM);
+        gfx_text_mid(CX, 50, right ? "BRAVO !" : "RATE", 3, COL_TEXT);
+        gfx_text_mid(CX, 84, "LE MOT ETAIT", 1, COL_TEXT);
         big_word(98, word_of(g->word), COL_TEXT);
         if (!right && g->picked >= 0) {
-            snprintf(b, sizeof(b), "JOUEUR %c A CHOISI %s", game_player_char(other), word_of(g->choices[g->picked]));
-            gfx_text_mid(CX, 134, b, 1, COL_DIM);
+            snprintf(b, sizeof(b), "%s A CHOISI %s", game_player_name(other), word_of(g->choices[g->picked]));
+            gfx_text_mid(CX, 134, b, 1, COL_TEXT);
         }
         if (right) {
-            snprintf(b, sizeof(b), "+1 POUR JOUEUR %c", game_player_char(other));
-            gfx_text_mid(CX, 156, b, 2, mark_col(other));
+            snprintf(b, sizeof(b), "+1 POUR %s", game_player_name(other));
+            gfx_text_mid(CX, 156, b, 2, COL_TEXT);
         } else {
-            gfx_text_mid(CX, 156, "PAS DE POINT", 2, COL_DIM);
+            gfx_text_mid(CX, 156, "PAS DE POINT", 2, COL_TEXT);
         }
-        snprintf(b, sizeof(b), "TOUCHE : JOUEUR %c DESSINE ENSUITE", game_player_char(other));
-        gfx_text_mid(CX, 220, b, 1, COL_DIM);
+        snprintf(b, sizeof(b), "TOUCHE : %s DESSINE ENSUITE", game_player_name(other));
+        gfx_text_mid(CX, 220, b, 1, COL_TEXT);
         break;
     }
     }

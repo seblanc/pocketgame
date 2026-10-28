@@ -276,11 +276,11 @@ static void steady_draw(const void *st, int preview)
     }
     char b[16], line[24];
     secs(b, sizeof(b), g->time[CELL_X]);
-    snprintf(line, sizeof(line), "A %s", b);
-    gfx_text(16, INFO_Y, line, 1, COL_X);
+    snprintf(line, sizeof(line), "%s %s", game_player_tag(CELL_X), b);
+    gfx_text(16, INFO_Y, line, 1, COL_TEXT);
     secs(b, sizeof(b), g->time[CELL_O]);
-    snprintf(line, sizeof(line), "B %s", b);
-    gfx_text_right(224, INFO_Y, line, 1, COL_O);
+    snprintf(line, sizeof(line), "%s %s", game_player_tag(CELL_O), b);
+    gfx_text_right(224, INFO_Y, line, 1, COL_TEXT);
     if (g->r.status == GAME_PLAYING) {
         if (g->run == STEADY_WAIT) {
             snprintf(line, sizeof(line), "TOUCHE = DEPART");

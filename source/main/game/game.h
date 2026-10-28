@@ -131,6 +131,20 @@ static inline char game_mark_char(uint8_t mark) { return mark == CELL_X ? 'X' : 
 /* the player's name on screen: A (blue, CELL_X) and B (red, CELL_O); the console keeps X/O */
 static inline char game_player_char(uint8_t mark) { return mark == CELL_X ? 'A' : mark == CELL_O ? 'B' : '-'; }
 
+/* On-screen player names wrapped in the colour marks of display.h (same tokens), so
+ * "A" / "JOUEUR A" is drawn blue, "B" / "JOUEUR B" red, the rest of the line white. */
+#define TXT_A "\x01"
+#define TXT_B "\x02"
+#define TXT_END "\x03"
+static inline const char *game_player_tag(uint8_t mark)
+{
+    return mark == CELL_X ? TXT_A "A" TXT_END : mark == CELL_O ? TXT_B "B" TXT_END : "-";
+}
+static inline const char *game_player_name(uint8_t mark)
+{
+    return mark == CELL_X ? TXT_A "JOUEUR A" TXT_END : mark == CELL_O ? TXT_B "JOUEUR B" TXT_END : "-";
+}
+
 /* resets r for a new round started by first */
 static inline void game_round_start(game_round_t *r, uint8_t first)
 {

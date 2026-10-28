@@ -455,26 +455,26 @@ static void dare_draw(const void *st, int preview)
     /* the corners count the dares done instead of the (unused) wins */
     gfx_rect(0, 0, 54, 36, COL_BG);
     gfx_rect(186, 0, 54, 36, COL_BG);
-    snprintf(b, sizeof(b), "A %u", g->done[CELL_X]);
-    gfx_text(8, 13, b, 2, COL_X);
-    snprintf(b, sizeof(b), "B %u", g->done[CELL_O]);
-    gfx_text_right(232, 13, b, 2, COL_O);
+    snprintf(b, sizeof(b), "%s %u", game_player_tag(CELL_X), g->done[CELL_X]);
+    gfx_text(8, 13, b, 2, COL_TEXT);
+    snprintf(b, sizeof(b), "%s %u", game_player_tag(CELL_O), g->done[CELL_O]);
+    gfx_text_right(232, 13, b, 2, COL_TEXT);
 
     if (g->dare == DARE_NONE) {
         draw_wheel(CX, WHEEL_CY, WHEEL_R, dare_wheel_pos(g), pc);
         if (dare_spinning(g)) {
-            gfx_text_mid(CX, 216, "LA ROUE TOURNE...", 1, COL_DIM);
+            gfx_text_mid(CX, 216, "LA ROUE TOURNE...", 1, COL_TEXT);
         } else {
-            snprintf(b, sizeof(b), "JOUEUR %c : TOUCHE", game_player_char(p));
-            gfx_text_mid(CX, 210, b, 1, pc);
+            snprintf(b, sizeof(b), "%s : TOUCHE", game_player_name(p));
+            gfx_text_mid(CX, 210, b, 1, COL_TEXT);
             gfx_text_mid(CX, 224, "POUR FAIRE TOURNER LA ROUE", 1, COL_TEXT);
         }
     } else {
-        snprintf(b, sizeof(b), "DEFI POUR JOUEUR %c :", game_player_char(p));
-        gfx_text_mid(CX, 46, b, 1, pc);
-        big_text(124, DARES[g->dare], COL_ACCENT);
-        snprintf(b, sizeof(b), "TOUCHE : AU TOUR DE JOUEUR %c", game_player_char(game_other(p)));
-        gfx_text_mid(CX, 222, b, 1, COL_DIM);
+        snprintf(b, sizeof(b), "DEFI POUR %s :", game_player_name(p));
+        gfx_text_mid(CX, 46, b, 1, COL_TEXT);
+        big_text(124, DARES[g->dare], COL_TEXT);
+        snprintf(b, sizeof(b), "TOUCHE : AU TOUR DE %s", game_player_name(game_other(p)));
+        gfx_text_mid(CX, 222, b, 1, COL_TEXT);
     }
 }
 
@@ -482,7 +482,7 @@ static void dare_banner(const void *st, char *buf, int n, uint8_t *mark)
 {
     const dare_t *g = st;
     *mark = g->r.turn;
-    snprintf(buf, n, g->dare == DARE_NONE ? "TOUR DE %c" : "DEFI DE %c", game_player_char(g->r.turn));
+    snprintf(buf, n, g->dare == DARE_NONE ? "TOUR DE %s" : "DEFI DE %s", game_player_tag(g->r.turn));
 }
 
 static void dare_icon(int x, int y, int s)
