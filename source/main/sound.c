@@ -36,7 +36,7 @@ static const note_t TUNE_BOOM[] = {{2400, 1400, false, true}, {0, 0}}; /* Hot Po
 static const note_t TUNE_FUSE[] = {{1760, 22}, {0, 0}};                 /* Hot Potato: the fuse ticks */
 static const note_t TUNE_COIN[] = {{988, 45}, {1319, 110}, {0, 0}};             /* Coin Platformer: a pickup */
 static const note_t TUNE_END[] = {{784, 90}, {587, 90}, {392, 200}, {0, 0}};  /* a timed run is over */
-/* Defi Secousse: enough shaking, a dare comes up */
+/* Roue des defis: the wheel stopped, a dare comes up */
 static const note_t TUNE_DARE[] = {{392, 70}, {523, 70}, {659, 70}, {784, 70}, {1047, 70}, {784, 60}, {1047, 220}, {0, 0}};
 static const note_t *const TUNES[] = {TUNE_X,    TUNE_O,    TUNE_BAD,  TUNE_WIN, TUNE_DRAW,
                                       TUNE_NEW,  TUNE_TICK, TUNE_BOOM, TUNE_COIN, TUNE_END, TUNE_DARE,

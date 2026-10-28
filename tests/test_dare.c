@@ -1,4 +1,4 @@
-/* Host test of Defi Secousse's rules (the UART acceptance sequence):
+/* Host test of Roue des defis' rules (the UART acceptance sequence):
  * gcc -DGAME_RULES_ONLY -I source/main tests/test_dare.c source/main/game/dare.c */
 #include <assert.h>
 #include <stdio.h>
@@ -26,22 +26,46 @@ int main(void)
 
     dare_t g;
     memset(&g, 0, sizeof(g));
-    dare_start(&g, CELL_X, 2500, true);
-    assert(g.r.turn == CELL_X && g.dare == DARE_NONE);
-    assert(!dare_pass(&g, 2000)); /* ERR no dare */
-    for (int t = 0; t < 1000; t += 20) {
-        assert(!dare_shake(&g, 20, game_random()));
+    dare_start(&g, CELL_X, true);
+    assert(g.r.turn == CELL_X && g.dare == DARE_NONE && !dare_spinning(&g));
+    assert(dare_pass(&g) == DARE_ERR_NONE); /* ERR no dare */
+    assert(dare_spin(&g, 4000, 40, game_random()) == DARE_OK);
+    assert(dare_spinning(&g) && dare_left(&g) == DARE_COUNT - 1);
+    assert(dare_spin(&g, 4000, 40, game_random()) == DARE_ERR_SPINNING);
+    assert(dare_pass(&g) == DARE_ERR_NONE); /* no dare while the wheel turns */
+
+    /* the wheel clicks once per wedge, fast at first, then slower */
+    int clicks, total = 0, first_s = 0;
+    bool stopped = false;
+    uint32_t last_pos = dare_wheel_pos(&g);
+    for (int t = 0; t < 4000 && !stopped; t += 20) {
+        stopped = dare_spin_step(&g, 20, &clicks);
+        total += clicks;
+        if (t < 1000) {
+            first_s += clicks;
+        }
+        if (!stopped) {
+            assert(dare_wheel_pos(&g) >= last_pos);
+            last_pos = dare_wheel_pos(&g);
+        }
     }
-    assert(g.shake_ms == 1000);
-    bool shown = false;
-    for (int t = 0; t < 3000 && !shown; t += 20) {
-        shown = dare_shake(&g, 20, game_random());
+    assert(stopped && total == 40 && first_s >= 16); /* over 40 % of the clicks in the first quarter */
+    assert(g.dare >= 0 && !dare_spinning(&g) && g.rest == 40 % DARE_WEDGES);
+    assert(dare_wheel_pos(&g) == (uint32_t)g.rest * 1000);
+    assert(dare_spin(&g, 4000, 40, game_random()) == DARE_ERR_SHOWN);
+    assert(dare_pass(&g) == DARE_OK);
+    assert(g.r.turn == CELL_O && g.dare == DARE_NONE && g.done[CELL_X] == 1);
+
+    /* O spins in uneven steps and lands too */
+    assert(dare_spin(&g, 3000, 37, game_random()) == DARE_OK);
+    total = 0;
+    stopped = false;
+    for (int t = 0; t < 3500 && !stopped; t += 70) {
+        stopped = dare_spin_step(&g, 70, &clicks);
+        total += clicks;
     }
-    assert(shown && g.dare >= 0 && g.shake_ms == 2500);
-    assert(!dare_shake(&g, 20, game_random())); /* no shaking while a dare is shown */
-    assert(dare_left(&g) == DARE_COUNT - 1);
-    assert(dare_pass(&g, 4000));
-    assert(g.r.turn == CELL_O && g.dare == DARE_NONE && g.shake_ms == 0 && g.done[CELL_X] == 1);
+    assert(stopped && total == 37 && g.rest == (40 + 37) % DARE_WEDGES && g.dare >= 0);
+    assert(dare_left(&g) == DARE_COUNT - 2);
 
     /* a whole deck never repeats, then it refills */
     dare_t c = g;
@@ -56,10 +80,11 @@ int main(void)
     dare_pick(&c, game_random());
     assert(dare_left(&c) == DARE_COUNT - 1);
 
-    /* a new round keeps the deck */
+    /* a new round keeps the deck and the wheel's position */
     uint64_t used = g.used;
-    dare_start(&g, CELL_O, 1500, true);
-    assert(g.used == used && g.r.turn == CELL_O);
+    uint16_t rest = g.rest;
+    dare_start(&g, CELL_O, true);
+    assert(g.used == used && g.rest == rest && g.r.turn == CELL_O && g.dare == DARE_NONE);
     printf("dare ok (%d dares)\n", DARE_COUNT);
     return 0;
 }

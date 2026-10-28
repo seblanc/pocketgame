@@ -65,14 +65,15 @@ const int DARE_COUNT = sizeof(DARES) / sizeof(DARES[0]);
 _Static_assert(sizeof(DARES) / sizeof(DARES[0]) <= 64, "the deck is a 64-bit mask");
 _Static_assert(sizeof(DARES) / sizeof(DARES[0]) >= 47, "at least 47 dares");
 
-void dare_start(dare_t *g, uint8_t first, uint32_t need_ms, bool keep_deck)
+void dare_start(dare_t *g, uint8_t first, bool keep_deck)
 {
     uint64_t used = keep_deck ? g->used : 0;
+    uint16_t rest = keep_deck ? g->rest % DARE_WEDGES : 0;
     memset(g, 0, sizeof(*g));
     game_round_start(&g->r, first);
     g->used = used;
-    g->need_ms = need_ms;
-    g->dare = DARE_NONE;
+    g->rest = rest;
+    g->dare = g->pending = DARE_NONE;
 }
 
 int dare_left(const dare_t *g)
@@ -101,32 +102,72 @@ int dare_pick(dare_t *g, uint32_t rnd)
     return 0; /* not reached */
 }
 
-bool dare_shake(dare_t *g, uint32_t dt_ms, uint32_t rnd)
+dare_result_t dare_spin(dare_t *g, uint32_t len_ms, uint16_t segs, uint32_t rnd)
 {
-    if (g->r.status != GAME_PLAYING || g->dare != DARE_NONE) {
+    if (g->r.status != GAME_PLAYING) {
+        return DARE_ERR_OVER;
+    }
+    if (g->dare != DARE_NONE) {
+        return DARE_ERR_SHOWN;
+    }
+    if (dare_spinning(g)) {
+        return DARE_ERR_SPINNING;
+    }
+    g->spin_len = len_ms > 0 ? len_ms : 1;
+    g->spin_ms = 0;
+    g->segs = segs;
+    g->clicks = 0;
+    g->pending = (int16_t)dare_pick(g, rnd);
+    return DARE_OK;
+}
+
+/* the spin's turn so far in thousandths of a wedge: fast at first, slowing to a stop
+ * (the speed falls linearly to zero, so the turn is segs * (1 - (1 - t/T)^2)) */
+static uint32_t spun(const dare_t *g)
+{
+    if (!dare_spinning(g)) {
+        return 0;
+    }
+    uint64_t t = g->spin_len, u = t - (g->spin_ms < g->spin_len ? g->spin_ms : g->spin_len);
+    return (uint32_t)((uint64_t)g->segs * 1000 * (t * t - u * u) / (t * t));
+}
+
+uint32_t dare_wheel_pos(const dare_t *g) { return (uint32_t)g->rest * 1000 + spun(g); }
+
+bool dare_spin_step(dare_t *g, uint32_t dt_ms, int *clicks)
+{
+    *clicks = 0;
+    if (g->r.status != GAME_PLAYING || !dare_spinning(g)) {
         return false;
     }
-    g->shake_ms += dt_ms;
-    g->anim_ms += dt_ms;
-    if (g->shake_ms < g->need_ms) {
+    g->spin_ms = g->spin_ms + dt_ms < g->spin_len ? g->spin_ms + dt_ms : g->spin_len;
+    /* a click as each border between two wedges passes the pointer (half a wedge on) */
+    uint16_t passed = (uint16_t)((spun(g) + 500) / 1000);
+    *clicks = passed - g->clicks;
+    g->clicks = passed;
+    if (g->spin_ms < g->spin_len) {
         return false;
     }
-    g->dare = (int16_t)dare_pick(g, rnd);
+    g->rest = (uint16_t)((g->rest + g->segs) % DARE_WEDGES);
+    g->spin_len = g->spin_ms = 0;
+    g->dare = g->pending;
+    g->pending = DARE_NONE;
     return true;
 }
 
-bool dare_pass(dare_t *g, uint32_t need_ms)
+dare_result_t dare_pass(dare_t *g)
 {
-    if (g->r.status != GAME_PLAYING || g->dare == DARE_NONE) {
-        return false;
+    if (g->r.status != GAME_PLAYING) {
+        return DARE_ERR_OVER;
+    }
+    if (g->dare == DARE_NONE) {
+        return DARE_ERR_NONE;
     }
     g->done[g->r.turn]++;
     g->r.turn = game_other(g->r.turn);
     g->r.moves++;
     g->dare = DARE_NONE;
-    g->shake_ms = 0;
-    g->need_ms = need_ms;
-    return true;
+    return DARE_OK;
 }
 
 #ifndef GAME_RULES_ONLY
@@ -140,13 +181,10 @@ bool dare_pass(dare_t *g, uint32_t need_ms)
 _Static_assert(sizeof(dare_t) <= GAME_STATE_MAX, "dare_t does not fit in a game slot");
 
 #define CX (SCREEN_W / 2)
+#define WHEEL_CY 128
+#define WHEEL_R 74
 
-static uint32_t random_need(void)
-{
-    return DARE_NEED_MIN_MS + game_random() % (DARE_NEED_MAX_MS - DARE_NEED_MIN_MS + 1);
-}
-
-static void dare_new_round(void *st, uint8_t first) { dare_start(st, first, random_need(), true); }
+static void dare_new_round(void *st, uint8_t first) { dare_start(st, first, true); }
 
 static void print_dare(const dare_t *g)
 {
@@ -166,35 +204,71 @@ static void dare_print(const void *st)
 static void dare_report(const void *st)
 {
     const dare_t *g = st;
-    if (g->dare == DARE_NONE) {
-        app_out("SHAKE %c ms=%lu need=%lu", game_mark_char(g->r.turn), (unsigned long)g->shake_ms,
-                (unsigned long)g->need_ms);
-    } else {
+    if (g->dare != DARE_NONE) {
         app_out("SHOWN %c idx=%d", game_mark_char(g->r.turn), g->dare);
+    } else if (dare_spinning(g)) {
+        app_out("WHEEL %c spin ms=%lu of=%lu clicks=%u", game_mark_char(g->r.turn), (unsigned long)g->spin_ms,
+                (unsigned long)g->spin_len, g->clicks);
+    } else {
+        app_out("WHEEL %c rest", game_mark_char(g->r.turn));
     }
 }
 
-/* the only move: a tap (or RIGHT) after the dare hands the board on */
+static game_event_t spin(dare_t *g)
+{
+    uint32_t len = DARE_SPIN_MIN_MS + game_random() % (DARE_SPIN_MAX_MS - DARE_SPIN_MIN_MS + 1);
+    uint16_t segs = (uint16_t)(DARE_SPIN_MIN_WEDGES + game_random() % (2 * DARE_WEDGES));
+    switch (dare_spin(g, len, segs, game_random())) {
+    case DARE_OK:
+        app_out("SPIN %c ms=%lu segs=%u", game_mark_char(g->r.turn), (unsigned long)len, segs);
+        return GEV_CLICK;
+    case DARE_ERR_SHOWN:
+        app_out("ERR dare shown (pass first)");
+        break;
+    case DARE_ERR_SPINNING:
+        app_out("ERR spinning");
+        break;
+    default:
+        app_out("ERR game over");
+        break;
+    }
+    return GEV_BAD;
+}
+
+static game_event_t pass(dare_t *g)
+{
+    uint8_t p = g->r.turn;
+    switch (dare_pass(g)) {
+    case DARE_OK:
+        app_out("PASS %c", game_mark_char(p));
+        app_out("TURN %c", game_mark_char(g->r.turn));
+        return p == CELL_X ? GEV_MOVE_X : GEV_MOVE_O;
+    case DARE_ERR_NONE:
+        app_out("ERR no dare (spin first)");
+        break;
+    default:
+        app_out("ERR game over");
+        break;
+    }
+    return GEV_BAD;
+}
+
+/* a tap (or RIGHT) spins the wheel, or hands the board on once the dare is shown;
+ * over the console "pass" only hands it on */
 static game_event_t dare_move(void *st, int m, const char *src)
 {
     dare_t *g = st;
     (void)m;
-    uint8_t p = g->r.turn;
-    if (g->r.status != GAME_PLAYING) {
-        app_out("ERR game over");
-        return GEV_BAD;
+    if (strcmp(src, "uart") == 0 || g->dare != DARE_NONE || g->r.status != GAME_PLAYING) {
+        return pass(g);
     }
-    if (!dare_pass(g, random_need())) {
-        app_out("ERR no dare (shake first)");
-        /* a stray tap while shaking the board is no mistake worth a buzz */
-        return strcmp(src, "uart") == 0 ? GEV_BAD : GEV_NONE;
+    if (dare_spinning(g)) {
+        return GEV_NONE; /* the wheel is turning: wait for it */
     }
-    app_out("PASS %c", game_mark_char(p));
-    app_out("TURN %c", game_mark_char(g->r.turn));
-    return p == CELL_X ? GEV_MOVE_X : GEV_MOVE_O;
+    return spin(g);
 }
 
-/* dare get <idx> | dare count | dare (the state) | pass */
+/* dare get <idx> | dare count | dare (the state) | spin | pass */
 static game_event_t dare_command(void *st, const char *arg)
 {
     char word[8] = "";
@@ -206,6 +280,9 @@ static game_event_t dare_command(void *st, const char *arg)
     }
     if (strcmp(word, "pass") == 0 && n == 1) {
         return dare_move(st, 0, "uart");
+    }
+    if (strcmp(word, "spin") == 0 && n == 1) {
+        return spin(st);
     }
     if (strcmp(word, "count") == 0 && n == 1) {
         app_out("DARES n=%d", DARE_COUNT);
@@ -223,25 +300,17 @@ static game_event_t dare_command(void *st, const char *arg)
     return GEV_BAD;
 }
 
+/* the clock turns the wheel; shaking and tilting do nothing here */
 static game_event_t dare_step(void *st, const motion_t *m)
 {
     dare_t *g = st;
-    if (g->r.status != GAME_PLAYING) {
-        return GEV_NONE;
-    }
-    g->shaking = m->shaking && g->dare == DARE_NONE;
-    if (g->dare != DARE_NONE) {
-        if (m->sim && (m->shaking || m->shake)) {
-            app_out("ERR dare shown (pass first)");
-            return GEV_BAD;
-        }
-        return GEV_NONE;
-    }
-    if (m->shaking && dare_shake(g, m->dt_ms, game_random())) {
+    int clicks;
+    if (dare_spin_step(g, m->dt_ms, &clicks)) {
         print_dare(g);
         return GEV_DARE;
     }
-    return GEV_NONE;
+    /* the clicks are only a sound: a simulated spin (whose steps stop at an event) stays silent */
+    return clicks > 0 && !m->sim ? GEV_CLICK : GEV_NONE;
 }
 
 /* "sim cycle": draws a whole deck from a fresh one (on a copy) and counts the repeats */
@@ -270,7 +339,7 @@ static int dare_hit(int x, int y)
 {
     (void)x;
     (void)y;
-    return 0; /* a tap anywhere hands the board on */
+    return 0; /* a tap anywhere spins or hands the board on */
 }
 
 static uint16_t mark_col(uint8_t mark) { return mark == CELL_X ? COL_X : COL_O; }
@@ -346,12 +415,33 @@ static void big_text(int cy, const char *s, uint16_t c)
     gfx_text_mid(CX, cy, s, 1, c);
 }
 
-/* the board being shaken: a small console that wobbles while it is shaken */
-static void draw_console(float cx, float cy, float s, uint16_t c)
+static const uint16_t WEDGE_COLS[] = {
+    RGB(235, 64, 64), RGB(255, 160, 0), RGB(240, 214, 40), RGB(56, 190, 90), RGB(64, 150, 255), RGB(160, 90, 235),
+};
+
+/* the wheel turned by pos thousandths of a wedge (clockwise), its pointer on top */
+static void draw_wheel(float cx, float cy, float r, uint32_t pos, uint16_t hub)
 {
-    gfx_rrect((int)(cx - s * 0.7f), (int)(cy - s), (int)(s * 1.4f), (int)(s * 2), (int)(s * 0.2f), c);
-    gfx_rrect((int)(cx - s * 0.5f), (int)(cy - s * 0.75f), (int)s, (int)s, 3, COL_DIM);
-    gfx_disc(cx, cy + s * 0.6f, s * 0.15f, c);
+    float per = 360.0f / DARE_WEDGES;
+    float turn = (float)(pos % (DARE_WEDGES * 1000)) * per / 1000.0f;
+    /* wedge k is centred under the pointer (-90 degrees) when the wheel stands at a whole wedge */
+    gfx_wheel(cx, cy, r, DARE_WEDGES, -90 - per / 2 + turn, WEDGE_COLS,
+              sizeof(WEDGE_COLS) / sizeof(WEDGE_COLS[0]));
+    gfx_ring(cx, cy, r + 2, 4, COL_TEXT);
+    /* a light on each border between two wedges */
+    for (int k = 0; k < DARE_WEDGES; k++) {
+        float a = (-90 - per / 2 + turn + k * per) * (float)M_PI / 180.0f;
+        gfx_disc(cx + cosf(a) * (r - 6), cy + sinf(a) * (r - 6), 2.5f, COL_TEXT);
+    }
+    gfx_disc(cx, cy, r * 0.22f, COL_BG);
+    gfx_ring(cx, cy, r * 0.22f, 2, hub);
+    gfx_text_mid((int)cx, (int)(cy - 7), "?", 2, hub);
+    /* the pointer: a triangle above the wheel, pointing down at the rim */
+    float ty = cy - r - 12;
+    for (int i = 0; i < 6; i++) {
+        float w = 9 - i * 1.6f;
+        gfx_line(cx - w, ty + i * 2.4f, cx + w, ty + i * 2.4f, 2.6f, COL_TEXT);
+    }
 }
 
 static void dare_draw(const void *st, int preview)
@@ -360,7 +450,7 @@ static void dare_draw(const void *st, int preview)
     const dare_t *g = st;
     uint8_t p = g->r.turn;
     uint16_t pc = mark_col(p);
-    char b[40];
+    char b[48];
 
     /* the corners count the dares done instead of the (unused) wins */
     gfx_rect(0, 0, 54, 36, COL_BG);
@@ -371,24 +461,19 @@ static void dare_draw(const void *st, int preview)
     gfx_text_right(232, 13, b, 2, COL_O);
 
     if (g->dare == DARE_NONE) {
-        float t = g->anim_ms / 1000.0f;
-        float dx = g->shaking ? sinf(t * 40.0f) * 10.0f : 0, dy = g->shaking ? cosf(t * 31.0f) * 5.0f : 0;
-        draw_console(CX + dx, 112 + dy, 30, pc);
-        if (g->shaking) {
-            gfx_line(CX - 50, 92, CX - 42, 104, 2, COL_DIM);
-            gfx_line(CX - 54, 116, CX - 44, 120, 2, COL_DIM);
-            gfx_line(CX + 50, 92, CX + 42, 104, 2, COL_DIM);
-            gfx_line(CX + 54, 116, CX + 44, 120, 2, COL_DIM);
+        draw_wheel(CX, WHEEL_CY, WHEEL_R, dare_wheel_pos(g), pc);
+        if (dare_spinning(g)) {
+            gfx_text_mid(CX, 216, "LA ROUE TOURNE...", 1, COL_DIM);
+        } else {
+            snprintf(b, sizeof(b), "JOUEUR %c : TOUCHE", game_player_char(p));
+            gfx_text_mid(CX, 210, b, 1, pc);
+            gfx_text_mid(CX, 224, "POUR FAIRE TOURNER LA ROUE", 1, COL_TEXT);
         }
-        snprintf(b, sizeof(b), "%c, SECOUE LA CONSOLE !", game_player_char(p));
-        gfx_text_mid(CX, 166, b, 1, pc);
-        gfx_text_mid(CX, 190, "SECOUE !", 2, COL_TEXT);
-        gfx_text_mid(CX, 222, "UN DEFI VA TOMBER...", 1, COL_DIM);
     } else {
-        snprintf(b, sizeof(b), "DEFI POUR %c :", game_player_char(p));
+        snprintf(b, sizeof(b), "DEFI POUR JOUEUR %c :", game_player_char(p));
         gfx_text_mid(CX, 46, b, 1, pc);
         big_text(124, DARES[g->dare], COL_ACCENT);
-        snprintf(b, sizeof(b), "TOUCHE OU DROITE : AU TOUR DE %c", game_player_char(game_other(p)));
+        snprintf(b, sizeof(b), "TOUCHE : AU TOUR DE JOUEUR %c", game_player_char(game_other(p)));
         gfx_text_mid(CX, 222, b, 1, COL_DIM);
     }
 }
@@ -403,22 +488,19 @@ static void dare_banner(const void *st, char *buf, int n, uint8_t *mark)
 static void dare_icon(int x, int y, int s)
 {
     gfx_rrect(x, y, s, s, 6, COL_LINE);
-    float cx = x + s / 2.0f, cy = y + s / 2.0f;
-    gfx_rrect((int)(cx - s * 0.16f), (int)(cy - s * 0.26f), (int)(s * 0.32f), (int)(s * 0.52f), 3, COL_ACCENT);
-    gfx_line(cx - s * 0.36f, cy - s * 0.18f, cx - s * 0.26f, cy - s * 0.04f, 1.5f, COL_DIM);
-    gfx_line(cx - s * 0.38f, cy + s * 0.06f, cx - s * 0.26f, cy + s * 0.1f, 1.5f, COL_DIM);
-    gfx_line(cx + s * 0.36f, cy - s * 0.18f, cx + s * 0.26f, cy - s * 0.04f, 1.5f, COL_DIM);
-    gfx_line(cx + s * 0.38f, cy + s * 0.06f, cx + s * 0.26f, cy + s * 0.1f, 1.5f, COL_DIM);
-    gfx_text_mid((int)cx, (int)(cy - s * 0.14f), "!", 2, COL_TEXT);
+    float cx = x + s / 2.0f, cy = y + s / 2.0f + s * 0.05f, r = s * 0.34f;
+    gfx_wheel(cx, cy, r, 6, -120, WEDGE_COLS, sizeof(WEDGE_COLS) / sizeof(WEDGE_COLS[0]));
+    gfx_disc(cx, cy, r * 0.25f, COL_TEXT);
+    gfx_line(cx - s * 0.08f, cy - r - s * 0.1f, cx + s * 0.08f, cy - r - s * 0.1f, 2, COL_TEXT);
+    gfx_line(cx, cy - r - s * 0.1f, cx, cy - r + s * 0.02f, 2, COL_TEXT);
 }
 
-static const char *const MORE_VERBS[] = {"pass", NULL};
+static const char *const MORE_VERBS[] = {"pass", "spin", NULL};
 
 static const char *const RULES[] = {
-    "CHACUN SON TOUR, SECOUE LA CONSOLE.",
-    "",
-    "APRES QUELQUES SECONDES DE",
-    "SECOUSSE, UN SON RETENTIT ET",
+    "CHACUN SON TOUR : TOUCHE L'ECRAN",
+    "POUR FAIRE TOURNER LA ROUE.",
+    "ELLE RALENTIT ET S'ARRETE :",
     "UN DEFI S'AFFICHE.",
     "",
     "RELEVE LE DEFI, PUIS TOUCHE",
@@ -429,11 +511,11 @@ static const char *const RULES[] = {
     "QUE TOUS SOIENT SORTIS.",
     NULL,
 };
-_Static_assert(DARE_NEED_MIN_MS == 1500 && DARE_NEED_MAX_MS == 4000, "update rules_uart");
+_Static_assert(DARE_SPIN_MIN_MS == 3000 && DARE_SPIN_MAX_MS == 5000 && DARE_WEDGES == 12, "update rules_uart");
 
-const game_def_t DEFI_SECOUSSE = {
+const game_def_t ROUE_DES_DEFIS = {
     .id = "dare",
-    .title = "DEFI SECOUSSE",
+    .title = "ROUE DES DEFIS",
     .verb = "dare",
     .more_verbs = MORE_VERBS,
     .new_round = dare_new_round,
@@ -447,7 +529,7 @@ const game_def_t DEFI_SECOUSSE = {
     .report = dare_report,
     .sim_set = dare_sim_set,
     .rules = RULES,
-    .rules_uart = "shake=1.5-4s dare=random repeat=never-before-all pass=tap|right",
+    .rules_uart = "spin=3-5s wedges=12 dare=random repeat=never-before-all pass=tap|right",
     .banner = dare_banner,
     .right_taps = true,
 };

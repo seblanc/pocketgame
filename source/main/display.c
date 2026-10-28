@@ -144,6 +144,28 @@ void gfx_arc(float cx, float cy, float r, float width, float a0, float a1, uint1
 
 void gfx_ring(float cx, float cy, float r, float width, uint16_t c) { gfx_arc(cx, cy, r, width, 0, 360, c); }
 
+void gfx_wheel(float cx, float cy, float r, int n, float a0, const uint16_t *cols, int n_cols)
+{
+    if (!s_fb || n <= 0 || n_cols <= 0) {
+        return;
+    }
+    int ext = (int)ceilf(r + 1);
+    float per = 360.0f / n;
+    for (int y = (int)cy - ext; y <= (int)cy + ext; y++) {
+        for (int x = (int)cx - ext; x <= (int)cx + ext; x++) {
+            float dx = x + 0.5f - cx, dy = y + 0.5f - cy;
+            float a = clamp01(r + 0.5f - sqrtf(dx * dx + dy * dy));
+            if (a <= 0) {
+                continue;
+            }
+            float ang = atan2f(dy, dx) * (180.0f / (float)M_PI) - a0;
+            ang -= floorf(ang / 360.0f) * 360.0f;
+            int k = (int)(ang / per);
+            blend(x, y, cols[(k < n ? k : n - 1) % n_cols], a);
+        }
+    }
+}
+
 void gfx_disc(float cx, float cy, float r, uint16_t c)
 {
     if (!s_fb) {

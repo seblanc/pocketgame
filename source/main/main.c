@@ -2,7 +2,7 @@
  *
  * Screens: home menu (one tile per game, top bar with battery % and Wi-Fi), the
  * games (tic-tac-toe, Connect 4, the IMU games Tilt Duel, Hot Potato and Steady Hand,
- * Draw & Guess, Coin Platformer and Defi Secousse, modules in game/), a leave-game confirmation,
+ * Draw & Guess, Coin Platformer and Roue des defis, modules in game/), a leave-game confirmation,
  * Settings (volume, where 0 is silent, Wi-Fi, updates), the Wi-Fi setup hotspot screen,
  * the update screen (GitHub check, download progress) and a game's rules screen.
  *
@@ -47,12 +47,13 @@
  *                              FINISH X coins=n left=ns points=n, TURN O + RUN O id=hex
  *                              same=yes | WIN | DRAW (by points: 10 a coin + 1 a second left).
  *                              On the board tilting walks, RIGHT jumps (or starts the next round)
- *   dare get <idx> | dare count | pass   Defi Secousse (switches to it): DARE idx=n text=..,
- *                              DARES n=..; pass after a dare: PASS X, TURN O | ERR no dare;
- *                              sim shake <ms> (steady shaking): SHAKE X ms=.. need=.. |
- *                              DARE X idx=n left=n text=.. | ERR dare shown; sim cycle draws a
- *                              whole deck: CYCLE draws=n unique=n total=n. On the board a tap
- *                              or RIGHT hands it on. "pass" goes to the game on screen first
+ *   dare get <idx> | dare count | spin | pass   Roue des defis (switches to it): DARE idx=n
+ *                              text=.., DARES n=..; spin: SPIN X ms=.. segs=.. | ERR spinning |
+ *                              ERR dare shown, then the stopped wheel: DARE X idx=n left=n
+ *                              text=..; pass after a dare: PASS X, TURN O | ERR no dare;
+ *                              sim wait <ms> turns the wheel; sim cycle draws a whole deck:
+ *                              CYCLE draws=n unique=n total=n. On the board a tap or RIGHT
+ *                              spins, then hands it on. "pass" goes to the game on screen first
  *   text                       TEXT screen=<name> <every string the screen shows, " | " between>
  *                              (the UI is French, upper case without accents; the protocol
  *                              stays English; STATUS ... lang=fr)
@@ -62,7 +63,7 @@
  *   imu                        IMU ax=.. ay=.. az=.. raw_ax=.. (mg; ax is the games' X axis,
  *                              the raw one inverted) | ERR imu not found
  *   rules                      the help screen of the game on screen (Hot Potato):
- *                              SCREEN rules game=potato, RULES fuse=8-20s hold=2s ...
+ *                              SCREEN rules game=potato, RULES fuse=15-30s hold=2s ...
  *   ota <http(s)://url>        flashes that image into the other app slot and restarts:
  *                              OTA start .., OTA progress pct=n, OTA done | OTA FAIL reason=..
  *   ota status                 OTA status state=.. running=ota_N next=ota_N fw=..
@@ -131,7 +132,7 @@
 
 /* the home menu tiles, in order; the first one is the default game */
 const game_def_t *const GAMES[] = {&TICTACTOE, &CONNECT4, &TILT_DUEL, &HOT_POTATO, &STEADY_HAND, &DRAW_GUESS,
-                                     &COIN_PLATFORMER, &DEFI_SECOUSSE};
+                                     &COIN_PLATFORMER, &ROUE_DES_DEFIS};
 const int GAME_COUNT = sizeof(GAMES) / sizeof(GAMES[0]);
 _Static_assert(sizeof(GAMES) / sizeof(GAMES[0]) <= GAME_MAX, "raise GAME_MAX");
 
@@ -325,6 +326,7 @@ static void play_event(game_event_t ev)
         [GEV_MOVE_X] = SND_X, [GEV_MOVE_O] = SND_O, [GEV_BAD] = SND_BAD,
         [GEV_WIN] = SND_WIN,  [GEV_DRAW] = SND_DRAW, [GEV_BOOM] = SND_BOOM,
         [GEV_RUN_END] = SND_END, [GEV_DARE] = SND_DARE, [GEV_TICK] = SND_FUSE,
+        [GEV_CLICK] = SND_TICK,
     };
     if (ev != GEV_NONE) {
         sound_play(SOUNDS[ev]);
@@ -845,7 +847,7 @@ static void handle_sim(const char *arg)
     } else if (strcmp(key, "shake") == 0 && n == 1) {
         m.shake = true;
     } else if (strcmp(key, "shake") == 0 && n == 2 && a > 0 && a <= 600000) {
-        /* <ms> of steady shaking (Defi Secousse), starting with a jolt */
+        /* <ms> of steady shaking, starting with a jolt */
         m.shake = true;
         m.shaking = true;
         ms = a;
@@ -1032,7 +1034,7 @@ static void handle_line(char *line)
             }
         }
         out("ERR unknown command (new | play <0-8> | drop <0-6> ... | maze | pass | hold | done | reveal | guess <0-2> | "
-            "level | dare get <n>|count | sim ... | imu | rules | board | status | text | "
+            "level | dare get <n>|count | spin | sim ... | imu | rules | board | status | text | "
             "open ttt|c4|tilt|potato|steady|draw|plat|dare | back | yes | no | "
             "settings | vol <0-100> | wifi ... | ota <url>|status | update check|install)");
     }
@@ -1406,7 +1408,7 @@ static void motion_task(void *arg)
             shake = true;
             shake_at = now;
         }
-        /* shaking goes on while jolts keep coming (Defi Secousse adds up its time) */
+        /* shaking goes on while jolts keep coming (no game uses it now) */
         if (live) {
             if (!have_g) {
                 gx = ax, gy = ay, gz = az;
@@ -1482,7 +1484,7 @@ static void power_off(void)
 
 /* RIGHT in a steering game on screen (Coin Platformer, held upright and steered by tilt):
  * a jump while the round runs (the first one starts the run), the next round once it is
- * over, so no finger is needed on the screen. In Defi Secousse it hands the board on. */
+ * over, so no finger is needed on the screen. In Roue des defis it spins the wheel or hands the board on. */
 static void key_jump(void)
 {
     lock();
@@ -1494,7 +1496,7 @@ static void key_jump(void)
     if (over) {
         app_new_game("button");
     } else if (steer) {
-        /* a jump, or a tap of the round (Defi Secousse: the next player) */
+        /* a jump, or a tap of the round (Roue des defis: spin or next player) */
         app_move(idx, 0, "button");
         request_redraw();
     }

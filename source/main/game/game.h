@@ -34,8 +34,9 @@ typedef enum {
     GEV_DRAW,
     GEV_BOOM,   /* a win for r.winner announced with the boom (Hot Potato) */
     GEV_RUN_END, /* a timed run ended, the other player's run is next (Coin Platformer) */
-    GEV_DARE,    /* enough shaking: a dare comes up (Defi Secousse) */
+    GEV_DARE,    /* the wheel stopped: a dare comes up (Roue des defis) */
     GEV_TICK,    /* the fuse ticks, only a sound (Hot Potato, live rounds only) */
+    GEV_CLICK,   /* the wheel clicks past a wedge, only a sound (Roue des defis) */
 } game_event_t;
 
 /* The motion games (Tilt Duel, Hot Potato, Steady Hand) are driven by time steps: the
@@ -49,7 +50,7 @@ typedef struct {
     bool sim;       /* injected over UART: a run waiting for its tap starts by itself */
     int dir;        /* games with steer(), over UART only: -1 walk left, 1 right, 0 by tilt */
     bool jump;      /* a jump in this step (Coin Platformer's autopilot) */
-    bool shaking;   /* the board is being shaken all through this step (Defi Secousse) */
+    bool shaking;   /* the board is being shaken all through this step (no game uses it now) */
 } motion_t;
 
 /* a random number for the games (hidden timers); the app provides it */
@@ -111,7 +112,7 @@ typedef struct {
     /* non-NULL: a steering game (Coin Platformer), walked by tilt, a RIGHT press is a
      * move (a jump) or, once the round is over, the next round; true while a run goes */
     bool (*steer)(const void *st);
-    /* true: a RIGHT press is a tap of the running round (Defi Secousse: the next player) */
+    /* true: a RIGHT press is a tap of the running round (Roue des defis: spin or next player) */
     bool right_taps;
 } game_def_t;
 

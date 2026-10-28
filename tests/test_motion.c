@@ -76,13 +76,11 @@ int main(void)
     assert(!potato_tick(&p, 2500));
     assert(potato_pass(&p) == POTATO_OK && p.r.turn == CELL_O);
     assert(potato_ticks(&p) && !potato_ticks(&p)); /* 2.5 s since the start: one tick, then none */
-    assert(potato_skip(&p) == POTATO_OK && p.r.turn == CELL_X);
-    assert(potato_skip(&p) == POTATO_OK && p.r.turn == CELL_O);
     assert(!potato_tick(&p, 2500));
     assert(potato_pass(&p) == POTATO_OK && p.r.turn == CELL_X);
-    assert(potato_skip(&p) == POTATO_ERR_USED);
-    /* the ticking speeds up toward the boom */
-    assert(potato_tick_interval(15000) > potato_tick_interval(6000));
+    /* the ticking is slow at first and speeds up toward the boom */
+    assert(potato_tick_interval(25000) > potato_tick_interval(12000));
+    assert(potato_tick_interval(12000) > potato_tick_interval(6000));
     assert(potato_tick_interval(6000) > potato_tick_interval(3000));
     assert(potato_tick_interval(3000) > potato_tick_interval(500));
     assert(potato_tick(&p, 5000));
