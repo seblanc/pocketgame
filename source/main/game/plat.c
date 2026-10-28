@@ -40,6 +40,8 @@ static int popcount16(uint16_t v)
 
 int plat_coins_left(const plat_t *g) { return popcount16(ALL_COINS & ~g->taken); }
 
+int plat_secs_left(const plat_t *g) { return g->ms >= PLAT_LIMIT_MS ? 0 : (int)((PLAT_LIMIT_MS - g->ms) / 1000); }
+
 uint32_t plat_level_id(const plat_t *g)
 {
     /* FNV-1a over the platforms, the coins and which coins are still out */
@@ -78,6 +80,7 @@ void plat_start(plat_t *g, uint8_t first)
     memset(g, 0, sizeof(*g));
     game_round_start(&g->r, first);
     g->coins[CELL_X] = g->coins[CELL_O] = PLAT_NOT_RUN;
+    g->points[CELL_X] = g->points[CELL_O] = PLAT_NOT_RUN;
     place_player(g);
     g->id = plat_level_id(g);
 }
@@ -107,12 +110,14 @@ static void end_run(plat_t *g)
 {
     uint8_t p = g->r.turn, o = game_other(p);
     g->coins[p] = (int8_t)popcount16(g->taken);
+    g->left_s = (int8_t)plat_secs_left(g);
+    g->points[p] = (int16_t)(g->coins[p] * PLAT_COIN_PTS + g->left_s);
     place_player(g);
-    if (g->coins[o] == PLAT_NOT_RUN) {
+    if (g->points[o] == PLAT_NOT_RUN) {
         g->r.turn = o;
         return;
     }
-    int a = g->coins[CELL_X], b = g->coins[CELL_O];
+    int a = g->points[CELL_X], b = g->points[CELL_O];
     if (a == b) {
         g->r.status = GAME_DRAW;
         return;
@@ -154,13 +159,7 @@ static bool move(plat_t *g, float walk, float dt)
     }
     float oy = g->y;
     g->vy = g->vy + GRAV * dt > FALL_MAX ? FALL_MAX : g->vy + GRAV * dt;
-    g->y += g->vy * dt;
-    if (g->y - PLAT_H < PLAT_TOP) {
-        g->y = PLAT_TOP + PLAT_H; /* head against the ceiling */
-        if (g->vy < 0) {
-            g->vy = 0;
-        }
-    }
+    g->y += g->vy * dt; /* no ceiling: a jump may rise past the top edge */
     if (g->vy <= 0) {
         return false;
     }
@@ -322,13 +321,22 @@ static int coins_of(const plat_t *g, uint8_t p)
     return g->r.status == GAME_PLAYING && g->r.turn == p ? popcount16(g->taken) : 0;
 }
 
-/* TURN O | WIN X x=.. o=.. | DRAW x=.. o=.. */
+/* the points of player p: the finished run's, or the running one's coins so far */
+static int points_of(const plat_t *g, uint8_t p)
+{
+    if (g->points[p] != PLAT_NOT_RUN) {
+        return g->points[p];
+    }
+    return coins_of(g, p) * PLAT_COIN_PTS;
+}
+
+/* TURN O | WIN X x=.. o=.. | DRAW x=.. o=.. (points) */
 static void print_result(const plat_t *g)
 {
     if (g->r.status == GAME_WIN) {
-        app_out("WIN %c x=%d o=%d", game_mark_char(g->r.winner), g->coins[CELL_X], g->coins[CELL_O]);
+        app_out("WIN %c x=%d o=%d", game_mark_char(g->r.winner), g->points[CELL_X], g->points[CELL_O]);
     } else if (g->r.status == GAME_DRAW) {
-        app_out("DRAW x=%d o=%d", g->coins[CELL_X], g->coins[CELL_O]);
+        app_out("DRAW x=%d o=%d", g->points[CELL_X], g->points[CELL_O]);
     } else {
         app_out("TURN %c", game_mark_char(g->r.turn));
     }
@@ -336,16 +344,20 @@ static void print_result(const plat_t *g)
 
 static void print_level(const plat_t *g)
 {
-    app_out("LEVEL plats=%d coins=%d id=%08lx limit=%ds", PLAT_NPLATS, PLAT_NCOINS, (unsigned long)g->id,
-            PLAT_LIMIT_MS / 1000);
+    app_out("LEVEL plats=%d coins=%d id=%08lx limit=%ds coin_pts=%d sec_pts=1 ceiling=none", PLAT_NPLATS,
+            PLAT_NCOINS, (unsigned long)g->id, PLAT_LIMIT_MS / 1000, PLAT_COIN_PTS);
 }
 
 static void plat_new_round(void *st, uint8_t first) { plat_start(st, first); }
 
 static void plat_print(const void *st)
 {
-    print_level(st);
-    print_result(st);
+    const plat_t *g = st;
+    print_level(g);
+    print_result(g);
+    if (g->r.status == GAME_PLAYING && g->run == PLAT_WAIT) {
+        app_out("HINT plat arrow=right jump=RIGHT walk=tilt");
+    }
 }
 
 static void plat_report(const void *st)
@@ -436,7 +448,8 @@ static game_event_t plat_step_ev(void *st, const motion_t *m)
             sound_play(SND_COIN);
             break;
         case PLAT_EV_FINISH: {
-            app_out("FINISH %c coins=%d", game_mark_char(p), g->coins[p]);
+            app_out("FINISH %c coins=%d left=%ds points=%d", game_mark_char(p), g->coins[p], g->left_s,
+                    g->points[p]);
             print_result(g);
             if (g->r.status != GAME_PLAYING) {
                 sound_play(SND_END); /* then the app's win or draw tune */
@@ -446,6 +459,7 @@ static game_event_t plat_step_ev(void *st, const motion_t *m)
             uint32_t id = plat_level_id(g);
             app_out("RUN %c id=%08lx same=%s", game_mark_char(g->r.turn), (unsigned long)id,
                     id == g->id ? "yes" : "no");
+            app_out("HINT plat arrow=right jump=RIGHT walk=tilt");
             return GEV_RUN_END; /* the app plays the end of the run */
         }
         }
@@ -497,27 +511,57 @@ static void draw_coin(float x, float y, float r)
     gfx_disc(x - r * 0.3f, y - r * 0.3f, r * 0.3f, COL_COIN_HI);
 }
 
-/* the round's result over the level: both players' coins, big, and the winner */
+/* the round's result over the level: both players' points, big, their coins and
+ * seconds left, and the winner */
 static void draw_final(const plat_t *g)
 {
-    const int x0 = 20, y0 = 70, w = 200, h = 112;
+    const int x0 = 20, y0 = 62, w = 200, h = 128;
     uint16_t edge = g->r.status == GAME_WIN ? (g->r.winner == CELL_X ? COL_X : COL_O) : COL_TEXT;
     gfx_rect(x0, y0, w, h, COL_BG);
     gfx_rrect(x0, y0, w, h, 6, edge);
     gfx_text_mid(SCREEN_W / 2, y0 + 10, "FINAL SCORE", 1, COL_DIM);
-    char buf[16];
-    snprintf(buf, sizeof(buf), "X %d", g->coins[CELL_X]);
-    gfx_text_mid(SCREEN_W / 2 - 46, y0 + 28, buf, 3, COL_X);
-    snprintf(buf, sizeof(buf), "O %d", g->coins[CELL_O]);
-    gfx_text_mid(SCREEN_W / 2 + 46, y0 + 28, buf, 3, COL_O);
-    draw_coin(SCREEN_W / 2, y0 + 38, 6);
+    char buf[24];
+    const uint8_t who[2] = {CELL_X, CELL_O};
+    for (int i = 0; i < 2; i++) {
+        uint8_t p = who[i];
+        int cx = SCREEN_W / 2 + (i ? 50 : -50);
+        uint16_t c = p == CELL_X ? COL_X : COL_O;
+        snprintf(buf, sizeof(buf), "%c %d", game_mark_char(p), g->points[p]);
+        gfx_text_mid(cx, y0 + 26, buf, 3, c);
+        snprintf(buf, sizeof(buf), "%d COINS", g->coins[p]);
+        gfx_text_mid(cx, y0 + 54, buf, 1, COL_TEXT);
+        /* the time bonus: only a run that took every coin has seconds left */
+        snprintf(buf, sizeof(buf), "+%dS LEFT", g->points[p] - g->coins[p] * PLAT_COIN_PTS);
+        gfx_text_mid(cx, y0 + 64, buf, 1, COL_DIM);
+    }
     if (g->r.status == GAME_WIN) {
         snprintf(buf, sizeof(buf), "%c WINS!", game_mark_char(g->r.winner));
     } else {
         snprintf(buf, sizeof(buf), "DRAW");
     }
-    gfx_text_mid(SCREEN_W / 2, y0 + 62, buf, 2, edge);
-    gfx_text_mid(SCREEN_W / 2, y0 + 92, "RIGHT: NEW ROUND", 1, COL_DIM);
+    gfx_text_mid(SCREEN_W / 2, y0 + 82, buf, 2, edge);
+    gfx_text_mid(SCREEN_W / 2, y0 + 108, "RIGHT: NEW ROUND", 1, COL_DIM);
+}
+
+/* before a run: how to play, with an arrow up to the RIGHT key on the top edge */
+static void draw_howto(const plat_t *g)
+{
+    const int x0 = 14, y0 = 58, w = 178, h = 96;
+    const int ax = 214; /* the arrow, up to just under the top right score */
+    uint16_t c = g->r.turn == CELL_X ? COL_X : COL_O;
+    gfx_rect(x0, y0, w, h, COL_BG);
+    gfx_rrect(x0, y0, w, h, 6, c);
+    gfx_text_mid(x0 + w / 2, y0 + 10, "RIGHT = JUMP", 2, COL_ACCENT);
+    gfx_text_mid(x0 + w / 2, y0 + 34, "TILT TO WALK", 1, COL_TEXT);
+    gfx_text_mid(x0 + w / 2, y0 + 50, "COIN 10 PTS", 1, COL_COIN);
+    gfx_text_mid(x0 + w / 2, y0 + 60, "+1 PT PER SECOND LEFT", 1, COL_COIN);
+    gfx_text_mid(x0 + w / 2, y0 + 78, "PRESS RIGHT TO START", 1, c);
+    /* from the box's "RIGHT = JUMP" line over to the corner, then up to the key */
+    gfx_line(x0 + w, y0 + 17, ax, y0 + 17, 3, COL_ACCENT);
+    gfx_line(ax, y0 + 17, ax, 34, 3, COL_ACCENT);
+    gfx_line(ax, 32, ax - 9, 43, 3, COL_ACCENT);
+    gfx_line(ax, 32, ax + 9, 43, 3, COL_ACCENT);
+    gfx_text_mid(ax, y0 + 24, "JUMP", 1, COL_ACCENT);
 }
 
 static void plat_draw(const void *st, int preview)
@@ -544,7 +588,7 @@ static void plat_draw(const void *st, int preview)
     }
 
     char line[24];
-    int x = coins_of(g, CELL_X), o = coins_of(g, CELL_O);
+    int x = points_of(g, CELL_X), o = points_of(g, CELL_O);
     bool x_known = g->coins[CELL_X] != PLAT_NOT_RUN || (g->r.status == GAME_PLAYING && g->r.turn == CELL_X);
     bool o_known = g->coins[CELL_O] != PLAT_NOT_RUN || (g->r.status == GAME_PLAYING && g->r.turn == CELL_O);
     if (x_known) {
@@ -565,6 +609,7 @@ static void plat_draw(const void *st, int preview)
         draw_final(g);
     } else {
         if (g->run == PLAT_WAIT) {
+            draw_howto(g);
             snprintf(line, sizeof(line), "RIGHT TO START");
         } else {
             snprintf(line, sizeof(line), "%d/%d  %luS", popcount16(g->taken), PLAT_NCOINS,

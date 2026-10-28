@@ -5,17 +5,19 @@
  * platforms with coins on them. Tilting the board left / right walks (flat or held
  * upright), RIGHT or a tap on the screen jumps (from the ground or a platform only); gravity pulls the player down, platforms are landed on
  * from above (jumped through from below) and walking off one falls to the level below.
+ * There is no ceiling: a jump may rise over the banner and past the top edge.
  * Touching a coin collects it. A run starts on the first tap and ends after 60 s or
  * when every coin is taken; then the other player runs the level with all coins back.
- * More coins wins, equal coins is a draw. The rules are pure C, also built on the
+ * A run scores 10 points a coin plus 1 point for each whole second left (only a run
+ * that takes every coin has time left); more points wins, equal points is a draw. The rules are pure C, also built on the
  * host by tests/ (-DGAME_RULES_ONLY).
  * UART: level -> LEVEL plats=n coins=n id=hex, PLAYER ..., TURN X; jump (a tap) ->
  * GO X + JUMP X | ERR airborne; sim jump | sim move L|R <ms> | sim wait <ms> |
  * sim autoplay; events LAND ground | LAND plat=n, COIN X idx=n n=n + SCORE X=n O=n,
- * FINISH X coins=n, then TURN O + RUN O id=hex same=yes | WIN X x=n o=n | DRAW x=n o=n */
+ * FINISH X coins=n left=ns points=n, then TURN O + RUN O id=hex same=yes |
+ * WIN X x=n o=n | DRAW x=n o=n (points) */
 
 #define PLAT_LIMIT_MS 60000
-#define PLAT_TOP 40     /* the play area, below the turn banner: the ceiling */
 #define PLAT_GROUND 212 /* the ground's top: the feet's y on the ground */
 #define PLAT_HALF_W 5   /* the player is 10 x 14 px, x at its middle, y at its feet */
 #define PLAT_H 14
@@ -23,7 +25,8 @@
 #define PLAT_X_MAX (240 - PLAT_HALF_W)
 #define PLAT_START_X 20
 #define PLAT_COIN_R 5
-#define PLAT_NOT_RUN (-1) /* coins[] of a player still to run */
+#define PLAT_NOT_RUN (-1) /* coins[] and points[] of a player still to run */
+#define PLAT_COIN_PTS 10  /* points a coin; each whole second left adds 1 */
 
 #define PLAT_ON_AIR 0xff
 #define PLAT_ON_GROUND 0xfe /* else the index of the platform stood on */
@@ -51,7 +54,9 @@ typedef struct {
     uint32_t ms;      /* time of the run so far */
     uint32_t id;      /* plat_level_id() when the round started */
     uint16_t taken;   /* bit i: coin i collected in this run */
+    int16_t points[3]; /* by mark: points of the run, PLAT_NOT_RUN */
     int8_t coins[3];  /* by mark: coins of the run, PLAT_NOT_RUN */
+    int8_t left_s;    /* whole seconds left when the last run ended */
     int8_t face;      /* -1 left, 1 right: the way the player looks */
     int8_t last_coin; /* the coin of the last PLAT_EV_COIN */
     uint8_t on;       /* PLAT_ON_AIR | PLAT_ON_GROUND | platform index */
@@ -81,5 +86,7 @@ float plat_tilt_walk(int tx);
  * fixed route that collects every coin */
 void plat_autopilot(plat_t *g, int *dir, bool *jump);
 int plat_coins_left(const plat_t *g);
+/* whole seconds left in the running run */
+int plat_secs_left(const plat_t *g);
 
 extern const game_def_t COIN_PLATFORMER;

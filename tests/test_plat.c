@@ -71,6 +71,7 @@ int main(void)
     /* X's run times out with 1 coin, O gets the same level, every coin back */
     assert(run_for(&g, 0, 61000, false) == PLAT_EV_FINISH);
     assert(g.coins[CELL_X] == 1 && g.r.turn == CELL_O && g.r.status == GAME_PLAYING);
+    assert(g.points[CELL_X] == PLAT_COIN_PTS && g.left_s == 0);
     assert(plat_level_id(&g) == id);
 
     /* O's autopilot lands on platforms and collects every coin */
@@ -79,6 +80,9 @@ int main(void)
     printf("autoplay: coins=%d plat landings=%d\n", g.coins[CELL_O], s_lands_plat);
     assert(s_lands_plat >= 1);
     assert(g.coins[CELL_O] == PLAT_NCOINS);
+    /* every coin taken early: the seconds left count too */
+    printf("autoplay: left=%ds points=%d\n", g.left_s, g.points[CELL_O]);
+    assert(g.left_s > 0 && g.points[CELL_O] == PLAT_NCOINS * PLAT_COIN_PTS + g.left_s);
     assert(g.r.status == GAME_WIN && g.r.winner == CELL_O);
 
     /* two idle runs: a draw */
@@ -86,7 +90,22 @@ int main(void)
     assert(g.r.turn == CELL_O);
     assert(run_for(&g, 0, 61000, false) == PLAT_EV_FINISH && g.coins[CELL_O] == 0 && g.r.turn == CELL_X);
     assert(run_for(&g, 0, 61000, false) == PLAT_EV_FINISH && g.coins[CELL_X] == 0);
-    assert(g.r.status == GAME_DRAW);
+    assert(g.r.status == GAME_DRAW && g.points[CELL_X] == 0 && g.points[CELL_O] == 0);
+
+    /* no ceiling: a jump from the high left platform rises past the top edge */
+    plat_start(&g, CELL_X);
+    plat_go(&g);
+    g.x = 75;
+    g.y = PLAT_PLATFORMS[3].y;
+    g.on = 3;
+    assert(plat_jump(&g));
+    float top = g.y;
+    for (int i = 0; i < 40; i++) {
+        uint32_t dt = 10;
+        plat_step(&g, 0, &dt);
+        top = g.y < top ? g.y : top;
+    }
+    assert(top - PLAT_H < 0);
 
     puts("plat OK");
     return 0;

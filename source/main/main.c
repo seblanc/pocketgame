@@ -44,7 +44,8 @@
  *                              PLAYER ..., or a tap: JUMP X | ERR airborne; sim jump,
  *                              sim move L|R <ms>, sim autoplay (collects every coin); events
  *                              LAND ground|plat=n, COIN X idx=n n=n + SCORE X=n O=n,
- *                              FINISH X coins=n, TURN O + RUN O id=hex same=yes | WIN | DRAW.
+ *                              FINISH X coins=n left=ns points=n, TURN O + RUN O id=hex
+ *                              same=yes | WIN | DRAW (by points: 10 a coin + 1 a second left).
  *                              On the board tilting walks, RIGHT jumps (or starts the next round)
  *   sim idle <ms> | sim touch  any screen: the idle timer jumps ahead (SIM idle=ms) / a
  *                              touch (INPUT touch); on USB a timeout replies
