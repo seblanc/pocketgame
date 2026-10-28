@@ -25,7 +25,8 @@ Minimal UI: dark background, thin lines, one accent colour.
   - **Tilt Duel:** each player taps to start, then tilts the board to roll a ball through an 8x8 maze
     with several turns and dead ends to the target; the faster run wins, 60 s is a timeout.
   - **Hot Potato:** a hidden 15-30 s fuse burns and ticks, slowly at first, faster as the boom nears;
-    tap to pass after holding 2 s. Shaking does nothing. The holder's colour fills the screen. Whoever
+    tap to pass after holding 2 s: a ring around the potato empties over those 2 s, then "TOUCHE ET
+    PASSE AU JOUEUR B" (or A) appears. Shaking does nothing. The holder's colour fills the screen. Whoever
     holds it at the explosion loses ("JOUEUR A A PERDU"). The "?" opens a rules screen.
   - **Steady Hand:** keep the tilt-driven bubble inside the target circle. It shrinks, every 4 s jumps
     to a new random place (a bit smaller each time; 1.2 s to reach it) and shrinks again, until the

@@ -73,7 +73,11 @@ int main(void)
     potato_t p;
     potato_start(&p, CELL_X, 10000);
     assert(potato_pass(&p) == POTATO_ERR_SOON);
-    assert(!potato_tick(&p, 2500));
+    assert(potato_hold_left_pct(&p) == 100);
+    assert(!potato_tick(&p, 1000));
+    assert(potato_hold_left_pct(&p) == 50); /* the hold ring empties over the 2 s */
+    assert(!potato_tick(&p, 1500));
+    assert(potato_hold_left_pct(&p) == 0);
     assert(potato_pass(&p) == POTATO_OK && p.r.turn == CELL_O);
     assert(potato_ticks(&p) && !potato_ticks(&p)); /* 2.5 s since the start: one tick, then none */
     assert(!potato_tick(&p, 2500));

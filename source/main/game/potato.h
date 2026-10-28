@@ -7,7 +7,8 @@
  * at first, then faster and faster as the boom comes near. Shaking does nothing. The
  * rules are pure C, also built on the host by tests/ (-DGAME_RULES_ONLY).
  * UART: pass -> PASS X, TURN O | ERR too soon | ERR game over; the end -> BOOM X, WIN O;
- * sim fuse <ms> -> SIM fuse=<ms> */
+ * sim fuse <ms> -> SIM fuse=<ms>; after sim: POTATO ... run=burning ring=<0-100> (the hold
+ * ring around the potato, which empties over the 2 s hold) */
 
 #define POTATO_HOLD_MS 2000
 #define POTATO_FUSE_MIN_MS 15000
@@ -33,5 +34,7 @@ bool potato_tick(potato_t *g, uint32_t dt_ms);
 uint32_t potato_tick_interval(uint32_t fuse_left_ms);
 /* true when the fuse ticks now (call after potato_tick) */
 bool potato_ticks(potato_t *g);
+/* how much of the minimum hold is left, 100 (just got it) .. 0 (may pass) */
+int potato_hold_left_pct(const potato_t *g);
 
 extern const game_def_t HOT_POTATO;

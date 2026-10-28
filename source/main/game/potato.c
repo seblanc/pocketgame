@@ -66,6 +66,14 @@ bool potato_ticks(potato_t *g)
     return true;
 }
 
+int potato_hold_left_pct(const potato_t *g)
+{
+    if (g->held_ms >= POTATO_HOLD_MS) {
+        return 0;
+    }
+    return (int)((POTATO_HOLD_MS - g->held_ms) * 100 / POTATO_HOLD_MS);
+}
+
 #ifndef GAME_RULES_ONLY
 /* ---- the game module: console, touch and drawing ---- */
 #include <math.h>
@@ -110,8 +118,9 @@ static void potato_print(const void *st)
 static void potato_report(const void *st)
 {
     const potato_t *g = st;
-    app_out("POTATO holder=%c held=%lu total=%lu run=%s", game_mark_char(g->r.turn), (unsigned long)g->held_ms,
-            (unsigned long)g->total_ms, g->r.status == GAME_PLAYING ? "burning" : "over");
+    app_out("POTATO holder=%c held=%lu total=%lu run=%s ring=%d", game_mark_char(g->r.turn),
+            (unsigned long)g->held_ms, (unsigned long)g->total_ms, g->r.status == GAME_PLAYING ? "burning" : "over",
+            potato_hold_left_pct(g));
 }
 
 static game_event_t result_ev(const potato_t *g, potato_result_t res, uint8_t p, const char *what)
@@ -222,15 +231,18 @@ static void potato_draw(const void *st, int preview)
         uint8_t p = g->r.turn;
         uint16_t c = p == CELL_X ? COL_X : COL_O;
         gfx_rect(0, TOP, SCREEN_W, SCREEN_H - TOP, p == CELL_X ? COL_X_TINT : COL_O_TINT);
-        /* the ring flashes with each tick of the fuse */
-        bool flash = g->tick_ms < 120;
-        gfx_ring(CX, CY, 70, flash ? 10 : 7, flash ? COL_TEXT : c);
+        /* the hold ring: full when the holder gets the potato, it empties (clockwise from
+         * the top) over the minimum hold; a dim track shows where it was */
+        gfx_ring(CX, CY, 70, 8, COL_LINE);
+        int left = potato_hold_left_pct(g);
+        if (left > 0) {
+            gfx_arc(CX, CY, 70, 8, 270, 270 + 360.0f * left / 100, c);
+        }
         draw_potato(CX, CY, 52);
-        if (g->held_ms >= POTATO_HOLD_MS) {
-            gfx_text_mid(CX, 210, "TOUCHE : PASSE", 2, COL_TEXT);
-        } else {
-            snprintf(b, sizeof(b), "GARDE-LA %lu S", (unsigned long)((POTATO_HOLD_MS - g->held_ms + 999) / 1000));
-            gfx_text_mid(CX, 210, b, 2, COL_TEXT);
+        if (left == 0) {
+            gfx_text_mid(CX, 205, "TOUCHE ET PASSE", 2, COL_TEXT);
+            snprintf(b, sizeof(b), "AU %s", game_player_name(game_other(p)));
+            gfx_text_mid(CX, 223, b, 2, COL_TEXT);
         }
     } else {
         uint8_t l = g->loser;
