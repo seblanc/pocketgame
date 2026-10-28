@@ -8,6 +8,14 @@ void potato_start(potato_t *g, uint8_t first, uint32_t fuse_ms)
     g->fuse_ms = fuse_ms;
 }
 
+/* the potato goes to the other player */
+static void hand_over(potato_t *g)
+{
+    g->r.turn = game_other(g->r.turn);
+    g->held_ms = 0;
+    g->r.moves++;
+}
+
 potato_result_t potato_pass(potato_t *g)
 {
     if (g->r.status != GAME_PLAYING) {
@@ -16,9 +24,20 @@ potato_result_t potato_pass(potato_t *g)
     if (g->held_ms < POTATO_HOLD_MS) {
         return POTATO_ERR_SOON;
     }
-    g->r.turn = game_other(g->r.turn);
-    g->held_ms = 0;
-    g->r.moves++;
+    hand_over(g);
+    return POTATO_OK;
+}
+
+potato_result_t potato_skip(potato_t *g)
+{
+    if (g->r.status != GAME_PLAYING) {
+        return POTATO_ERR_OVER;
+    }
+    if (g->skip_used[g->r.turn]) {
+        return POTATO_ERR_USED;
+    }
+    g->skip_used[g->r.turn] = true;
+    hand_over(g);
     return POTATO_OK;
 }
 
@@ -92,7 +111,8 @@ static void print_turn(const potato_t *g)
 static void potato_print(const void *st)
 {
     const potato_t *g = st;
-    app_out("POTATO holder=%c held=%lu", game_mark_char(g->r.turn), (unsigned long)g->held_ms);
+    app_out("POTATO holder=%c held=%lu skips=%c%c", game_mark_char(g->r.turn), (unsigned long)g->held_ms,
+            g->skip_used[CELL_X] ? '-' : 'X', g->skip_used[CELL_O] ? '-' : 'O');
     print_turn(g);
 }
 
@@ -103,6 +123,26 @@ static void potato_report(const void *st)
             (unsigned long)g->total_ms, g->r.status == GAME_PLAYING ? "burning" : "over");
 }
 
+static game_event_t result_ev(const potato_t *g, potato_result_t res, uint8_t p, const char *what)
+{
+    switch (res) {
+    case POTATO_OK:
+        app_out("%s %c", what, game_mark_char(p));
+        print_turn(g);
+        return p == CELL_X ? GEV_MOVE_X : GEV_MOVE_O;
+    case POTATO_ERR_SOON:
+        app_out("ERR too soon (hold %d s)", POTATO_HOLD_MS / 1000);
+        break;
+    case POTATO_ERR_USED:
+        app_out("ERR skip used");
+        break;
+    case POTATO_ERR_OVER:
+        app_out("ERR game over");
+        break;
+    }
+    return GEV_BAD;
+}
+
 /* the only move: a tap passes the potato */
 static game_event_t potato_move(void *st, int m, const char *src)
 {
@@ -110,19 +150,7 @@ static game_event_t potato_move(void *st, int m, const char *src)
     (void)m;
     (void)src;
     uint8_t p = g->r.turn;
-    switch (potato_pass(g)) {
-    case POTATO_OK:
-        app_out("PASS %c", game_mark_char(p));
-        print_turn(g);
-        return p == CELL_X ? GEV_MOVE_X : GEV_MOVE_O;
-    case POTATO_ERR_SOON:
-        app_out("ERR too soon (hold %d s)", POTATO_HOLD_MS / 1000);
-        break;
-    case POTATO_ERR_OVER:
-        app_out("ERR game over");
-        break;
-    }
-    return GEV_BAD;
+    return result_ev(g, potato_pass(g), p, "PASS");
 }
 
 static game_event_t potato_command(void *st, const char *arg)
@@ -137,16 +165,29 @@ static game_event_t potato_command(void *st, const char *arg)
 static game_event_t potato_step(void *st, const motion_t *m)
 {
     potato_t *g = st;
-    if (m->shake && m->sim) {
-        app_out("SHAKE ignored holder=%c", game_mark_char(g->r.turn)); /* shaking passes nothing */
-    }
     if (g->r.status != GAME_PLAYING) {
+        if (m->shake && m->sim) {
+            app_out("ERR game over");
+            return GEV_BAD;
+        }
         return GEV_NONE;
+    }
+    game_event_t ev = GEV_NONE;
+    if (m->shake) {
+        uint8_t p = g->r.turn;
+        potato_result_t res = potato_skip(g);
+        /* a used skip is only reported when asked for (a real shake may repeat) */
+        if (res == POTATO_OK || m->sim) {
+            ev = result_ev(g, res, p, "SKIP");
+        }
     }
     if (potato_tick(g, m->dt_ms)) {
         app_out("BOOM %c ms=%lu", game_mark_char(g->loser), (unsigned long)g->total_ms);
         print_turn(g);
         return GEV_BOOM;
+    }
+    if (ev != GEV_NONE) {
+        return ev;
     }
     /* the ticking is only a sound: a simulated round (whose steps stop at an event) stays silent */
     return potato_ticks(g) && !m->sim ? GEV_TICK : GEV_NONE;
@@ -210,12 +251,11 @@ static void potato_draw(const void *st, int preview)
         draw_potato(CX, CY, 52);
         if (g->held_ms >= POTATO_HOLD_MS) {
             gfx_text_mid(CX, 202, "TOUCHE : PASSE", 2, COL_TEXT);
-            gfx_text_mid(CX, 226, "VITE, AVANT LE BOUM !", 1, COL_TEXT);
         } else {
             snprintf(b, sizeof(b), "GARDE-LA %lu S", (unsigned long)((POTATO_HOLD_MS - g->held_ms + 999) / 1000));
             gfx_text_mid(CX, 202, b, 2, COL_TEXT);
-            gfx_text_mid(CX, 226, "PUIS TOUCHE POUR PASSER", 1, COL_TEXT);
         }
+        gfx_text_mid(CX, 226, g->skip_used[p] ? "SAUT DEJA UTILISE" : "SECOUE = SAUTER (1 FOIS)", 1, COL_TEXT);
     } else {
         uint8_t l = g->loser;
         gfx_rect(0, TOP, SCREEN_W, SCREEN_H - TOP, l == CELL_X ? COL_X_TINT : COL_O_TINT);
@@ -233,13 +273,14 @@ static void potato_icon(int x, int y, int s)
 }
 
 static const char *const RULES[] = {
-    "UNE MECHE CACHEE BRULE 8 A 20 S.",
-    "TIC TAC : PLUS ELLE ACCELERE,",
-    "PLUS LE BOUM EST PROCHE.",
+    "UNE MECHE CACHEE BRULE 8 A 20 S,",
+    "SON TIC TAC ACCELERE AVANT LE BOUM.",
     "",
     "GARDE LA CONSOLE AU MOINS 2 S,",
-    "PUIS TOUCHE L'ECRAN POUR LA",
-    "PASSER A L'AUTRE JOUEUR.",
+    "PUIS TOUCHE L'ECRAN POUR PASSER.",
+    "",
+    "PRESSE ? SECOUE-LA POUR SAUTER :",
+    "UN SAUT PAR JOUEUR ET PAR MANCHE.",
     "",
     "CELUI QUI TIENT LA CONSOLE AU",
     "BOUM PERD LA MANCHE.",
@@ -263,6 +304,6 @@ const game_def_t HOT_POTATO = {
     .report = potato_report,
     .sim_set = potato_sim_set,
     .rules = RULES,
-    .rules_uart = "fuse=8-20s hold=2s tick=faster boom=loses",
+    .rules_uart = "fuse=8-20s hold=2s skip=1 boom=loses tick=faster",
 };
 #endif
