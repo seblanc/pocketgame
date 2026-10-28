@@ -218,9 +218,9 @@ static void draw_game(const app_view_t *v)
         return;
     }
     char buf[16];
-    snprintf(buf, sizeof(buf), "X %d", s->wins_x > 99 ? 99 : s->wins_x);
+    snprintf(buf, sizeof(buf), "A %d", s->wins_x > 99 ? 99 : s->wins_x);
     gfx_text(8, 13, buf, 2, COL_X);
-    snprintf(buf, sizeof(buf), "O %d", s->wins_o > 99 ? 99 : s->wins_o);
+    snprintf(buf, sizeof(buf), "B %d", s->wins_o > 99 ? 99 : s->wins_o);
     gfx_text_right(232, 13, buf, 2, COL_O);
 
     /* turn banner, filled in the colour of the player it is about */
@@ -231,7 +231,7 @@ static void draw_game(const app_view_t *v)
         tc = mark == CELL_EMPTY ? COL_TEXT : player_col(mark);
         fill = mark == CELL_EMPTY ? COL_LINE : player_dim(mark);
     } else if (g->status == GAME_WIN) {
-        snprintf(buf, sizeof(buf), "%c GAGNE", game_mark_char(g->winner));
+        snprintf(buf, sizeof(buf), "%c GAGNE", game_player_char(g->winner));
         tc = player_col(g->winner);
         fill = player_dim(g->winner);
     } else if (g->status == GAME_DRAW) {
@@ -239,7 +239,7 @@ static void draw_game(const app_view_t *v)
         tc = COL_TEXT;
         fill = COL_LINE;
     } else {
-        snprintf(buf, sizeof(buf), g->moves == 0 ? "%c COMMENCE" : "TOUR DE %c", game_mark_char(g->turn));
+        snprintf(buf, sizeof(buf), g->moves == 0 ? "%c COMMENCE" : "TOUR DE %c", game_player_char(g->turn));
         tc = player_col(g->turn);
         fill = player_dim(g->turn);
     }

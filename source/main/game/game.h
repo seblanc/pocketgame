@@ -35,6 +35,7 @@ typedef enum {
     GEV_BOOM,   /* a win for r.winner announced with the boom (Hot Potato) */
     GEV_RUN_END, /* a timed run ended, the other player's run is next (Coin Platformer) */
     GEV_DARE,    /* enough shaking: a dare comes up (Defi Secousse) */
+    GEV_TICK,    /* the fuse ticks, only a sound (Hot Potato, live rounds only) */
 } game_event_t;
 
 /* The motion games (Tilt Duel, Hot Potato, Steady Hand) are driven by time steps: the
@@ -125,6 +126,9 @@ static inline const game_round_t *game_round(const void *st) { return (const gam
 static inline uint8_t game_other(uint8_t mark) { return mark == CELL_X ? CELL_O : CELL_X; }
 
 static inline char game_mark_char(uint8_t mark) { return mark == CELL_X ? 'X' : mark == CELL_O ? 'O' : '.'; }
+
+/* the player's name on screen: A (blue, CELL_X) and B (red, CELL_O); the console keeps X/O */
+static inline char game_player_char(uint8_t mark) { return mark == CELL_X ? 'A' : mark == CELL_O ? 'B' : '-'; }
 
 /* resets r for a new round started by first */
 static inline void game_round_start(game_round_t *r, uint8_t first)

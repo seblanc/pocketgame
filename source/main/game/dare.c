@@ -365,9 +365,9 @@ static void dare_draw(const void *st, int preview)
     /* the corners count the dares done instead of the (unused) wins */
     gfx_rect(0, 0, 54, 36, COL_BG);
     gfx_rect(186, 0, 54, 36, COL_BG);
-    snprintf(b, sizeof(b), "X %u", g->done[CELL_X]);
+    snprintf(b, sizeof(b), "A %u", g->done[CELL_X]);
     gfx_text(8, 13, b, 2, COL_X);
-    snprintf(b, sizeof(b), "O %u", g->done[CELL_O]);
+    snprintf(b, sizeof(b), "B %u", g->done[CELL_O]);
     gfx_text_right(232, 13, b, 2, COL_O);
 
     if (g->dare == DARE_NONE) {
@@ -380,15 +380,15 @@ static void dare_draw(const void *st, int preview)
             gfx_line(CX + 50, 92, CX + 42, 104, 2, COL_DIM);
             gfx_line(CX + 54, 116, CX + 44, 120, 2, COL_DIM);
         }
-        snprintf(b, sizeof(b), "%c, SECOUE LA CONSOLE !", game_mark_char(p));
+        snprintf(b, sizeof(b), "%c, SECOUE LA CONSOLE !", game_player_char(p));
         gfx_text_mid(CX, 166, b, 1, pc);
         gfx_text_mid(CX, 190, "SECOUE !", 2, COL_TEXT);
         gfx_text_mid(CX, 222, "UN DEFI VA TOMBER...", 1, COL_DIM);
     } else {
-        snprintf(b, sizeof(b), "DEFI POUR %c :", game_mark_char(p));
+        snprintf(b, sizeof(b), "DEFI POUR %c :", game_player_char(p));
         gfx_text_mid(CX, 46, b, 1, pc);
         big_text(124, DARES[g->dare], COL_ACCENT);
-        snprintf(b, sizeof(b), "TOUCHE OU DROITE : A %c", game_mark_char(game_other(p)));
+        snprintf(b, sizeof(b), "TOUCHE OU DROITE : AU TOUR DE %c", game_player_char(game_other(p)));
         gfx_text_mid(CX, 222, b, 1, COL_DIM);
     }
 }
@@ -397,7 +397,7 @@ static void dare_banner(const void *st, char *buf, int n, uint8_t *mark)
 {
     const dare_t *g = st;
     *mark = g->r.turn;
-    snprintf(buf, n, g->dare == DARE_NONE ? "TOUR DE %c" : "DEFI DE %c", game_mark_char(g->r.turn));
+    snprintf(buf, n, g->dare == DARE_NONE ? "TOUR DE %c" : "DEFI DE %c", game_player_char(g->r.turn));
 }
 
 static void dare_icon(int x, int y, int s)

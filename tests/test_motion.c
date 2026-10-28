@@ -75,12 +75,14 @@ int main(void)
     assert(potato_pass(&p) == POTATO_ERR_SOON);
     assert(!potato_tick(&p, 2500));
     assert(potato_pass(&p) == POTATO_OK && p.r.turn == CELL_O);
-    assert(potato_skip(&p) == POTATO_OK && p.r.turn == CELL_X);
-    assert(potato_skip(&p) == POTATO_OK && p.r.turn == CELL_O);
+    assert(potato_ticks(&p) && !potato_ticks(&p)); /* 2.5 s since the start: one tick, then none */
     assert(!potato_tick(&p, 2500));
     assert(potato_pass(&p) == POTATO_OK && p.r.turn == CELL_X);
-    assert(potato_skip(&p) == POTATO_ERR_USED);
-    assert(potato_tick(&p, 6000));
+    /* the ticking speeds up toward the boom */
+    assert(potato_tick_interval(15000) > potato_tick_interval(6000));
+    assert(potato_tick_interval(6000) > potato_tick_interval(3000));
+    assert(potato_tick_interval(3000) > potato_tick_interval(500));
+    assert(potato_tick(&p, 5000));
     assert(p.loser == CELL_X && p.r.status == GAME_WIN && p.r.winner == CELL_O);
 
     steady_t s;

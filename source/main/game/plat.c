@@ -490,17 +490,17 @@ static void plat_banner(const void *st, char *buf, int n, uint8_t *mark)
 {
     const plat_t *g = st;
     if (g->r.status == GAME_WIN) {
-        snprintf(buf, n, "%c GAGNE", game_mark_char(g->r.winner));
+        snprintf(buf, n, "%c GAGNE", game_player_char(g->r.winner));
         *mark = g->r.winner;
     } else if (g->r.status == GAME_DRAW) {
         snprintf(buf, n, "EGALITE");
         *mark = CELL_EMPTY;
     } else if (g->run == PLAT_WAIT) {
-        snprintf(buf, n, "%c PRET", game_mark_char(g->r.turn));
+        snprintf(buf, n, "%c PRET", game_player_char(g->r.turn));
         *mark = g->r.turn;
     } else {
         /* the countdown */
-        snprintf(buf, n, "%c %luS", game_mark_char(g->r.turn), (unsigned long)((PLAT_LIMIT_MS - g->ms + 999) / 1000));
+        snprintf(buf, n, "%c %luS", game_player_char(g->r.turn), (unsigned long)((PLAT_LIMIT_MS - g->ms + 999) / 1000));
         *mark = g->r.turn;
     }
 }
@@ -526,7 +526,7 @@ static void draw_final(const plat_t *g)
         uint8_t p = who[i];
         int cx = SCREEN_W / 2 + (i ? 50 : -50);
         uint16_t c = p == CELL_X ? COL_X : COL_O;
-        snprintf(buf, sizeof(buf), "%c %d", game_mark_char(p), g->points[p]);
+        snprintf(buf, sizeof(buf), "%c %d", game_player_char(p), g->points[p]);
         gfx_text_mid(cx, y0 + 26, buf, 3, c);
         snprintf(buf, sizeof(buf), "%d PIECES", g->coins[p]);
         gfx_text_mid(cx, y0 + 54, buf, 1, COL_TEXT);
@@ -535,7 +535,7 @@ static void draw_final(const plat_t *g)
         gfx_text_mid(cx, y0 + 64, buf, 1, COL_DIM);
     }
     if (g->r.status == GAME_WIN) {
-        snprintf(buf, sizeof(buf), "%c GAGNE !", game_mark_char(g->r.winner));
+        snprintf(buf, sizeof(buf), "%c GAGNE !", game_player_char(g->r.winner));
     } else {
         snprintf(buf, sizeof(buf), "EGALITE");
     }
@@ -592,16 +592,16 @@ static void plat_draw(const void *st, int preview)
     bool x_known = g->coins[CELL_X] != PLAT_NOT_RUN || (g->r.status == GAME_PLAYING && g->r.turn == CELL_X);
     bool o_known = g->coins[CELL_O] != PLAT_NOT_RUN || (g->r.status == GAME_PLAYING && g->r.turn == CELL_O);
     if (x_known) {
-        snprintf(line, sizeof(line), "X %d", x);
+        snprintf(line, sizeof(line), "A %d", x);
     } else {
-        snprintf(line, sizeof(line), "X -");
+        snprintf(line, sizeof(line), "A -");
     }
     draw_coin(10, INFO_Y + 3, 4);
     gfx_text(18, INFO_Y, line, 1, COL_X);
     if (o_known) {
-        snprintf(line, sizeof(line), "O %d", o);
+        snprintf(line, sizeof(line), "B %d", o);
     } else {
-        snprintf(line, sizeof(line), "O -");
+        snprintf(line, sizeof(line), "B -");
     }
     gfx_text_right(222, INFO_Y, line, 1, COL_O);
     draw_coin(230, INFO_Y + 3, 4);

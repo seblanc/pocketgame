@@ -276,10 +276,10 @@ static void steady_draw(const void *st, int preview)
     }
     char b[16], line[24];
     secs(b, sizeof(b), g->time[CELL_X]);
-    snprintf(line, sizeof(line), "X %s", b);
+    snprintf(line, sizeof(line), "A %s", b);
     gfx_text(16, INFO_Y, line, 1, COL_X);
     secs(b, sizeof(b), g->time[CELL_O]);
-    snprintf(line, sizeof(line), "O %s", b);
+    snprintf(line, sizeof(line), "B %s", b);
     gfx_text_right(224, INFO_Y, line, 1, COL_O);
     if (g->r.status == GAME_PLAYING) {
         if (g->run == STEADY_WAIT) {

@@ -585,10 +585,10 @@ static void tilt_draw(const void *st, int preview)
     char b[16];
     secs(b, sizeof(b), g->time[CELL_X]);
     char line[24];
-    snprintf(line, sizeof(line), "X %s", b);
+    snprintf(line, sizeof(line), "A %s", b);
     gfx_text(MAZE_X0, INFO_Y, line, 1, COL_X);
     secs(b, sizeof(b), g->time[CELL_O]);
-    snprintf(line, sizeof(line), "O %s", b);
+    snprintf(line, sizeof(line), "B %s", b);
     gfx_text_right(MAZE_X0 + TILT_COLS * TILT_CELL, INFO_Y, line, 1, COL_O);
     if (g->r.status == GAME_PLAYING) {
         if (g->run == TILT_WAIT) {

@@ -1,7 +1,8 @@
 #pragma once
 #include <stdbool.h>
 
-typedef enum { SND_X, SND_O, SND_BAD, SND_WIN, SND_DRAW, SND_NEW, SND_TICK, SND_BOOM, SND_COIN, SND_END, SND_DARE } sound_t;
+typedef enum { SND_X, SND_O, SND_BAD, SND_WIN, SND_DRAW, SND_NEW, SND_TICK, SND_BOOM, SND_COIN, SND_END, SND_DARE,
+               SND_FUSE /* Hot Potato's fuse ticking (dropped while sound is queued) */ } sound_t;
 
 /* Starts the ES8311 codec and speaker amplifier; returns a short status
  * ("es8311" or "none (...)"). Needs the I2C bus. */

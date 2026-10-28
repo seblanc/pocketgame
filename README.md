@@ -7,6 +7,7 @@ Minimal UI: dark background, thin lines, one accent colour.
   MORPION, PUISSANCE 4, LABYRINTHE, PATATE CHAUDE, MAIN STABLE, DESSINE ET DEVINE, CHASSE AUX PIECES,
   DEFI SECOUSSE, PARAMETRES... The serial protocol stays in English. `text` prints every string the
   current screen shows (`TEXT screen=menu MORPION | ...`); `STATUS` ends with `lang=fr`.
+  The players are named A (blue) and B (red) on screen; the serial protocol keeps X and O.
 - **Home screen:** no title, one touch tile per game right below the bar (Tic-tac-toe, Connect 4, Tilt Duel, Hot Potato, Steady Hand, Draw & Guess, Coin Platformer, Defi Secousse; all games are for 2 players) and a thin top bar with the battery %
   (IO1 / VBAT_ADC, 200k/100k divider) and the Wi-Fi state. The bar only shows outside games.
 - **Games** are self-contained modules in `source/main/game/` (one `.c/.h` per game) behind the common
@@ -23,8 +24,9 @@ Minimal UI: dark background, thin lines, one accent colour.
   left/right axis is inverted for all motion games with `IMU_INVERT_X`):
   - **Tilt Duel:** each player taps to start, then tilts the board to roll a ball through an 8x8 maze
     with several turns and dead ends to the target; the faster run wins, 60 s is a timeout.
-  - **Hot Potato:** a hidden 8-20 s fuse burns; tap to pass after holding 2 s, or shake once per round
-    to skip at once. Whoever holds it at the boom loses. The "?" opens a rules screen.
+  - **Hot Potato:** a hidden 8-20 s fuse burns and ticks, faster as the boom nears; tap to pass after
+    holding 2 s (shaking does nothing). The holder's colour fills the screen. Whoever holds it at the
+    explosion loses. The "?" opens a rules screen.
   - **Steady Hand:** keep the tilt-driven bubble inside the target circle. It shrinks, every 4 s jumps
     to a new random place (a bit smaller each time; 1.2 s to reach it) and shrinks again, until the
     bubble leaves it; the longer survival wins.
@@ -90,9 +92,9 @@ Serial commands (USB-C console, 115200):
 | `done`, `reveal`, `guess <0-2>`, `start`, `undo`, `clear` | Draw & Guess: `READY drawer=X`, `SCREEN handover`, `CHOICES a,b,c correct=n word=w`, `RESULT correct\|wrong`, `SCORE X=n O=n`, `TURN drawer=O`, `TIME up drawer=X`, `ERR not guessing\|empty` |
 | `sim word <idx>`, `sim correct <0-2>`, `sim stroke`, `sim wait <ms>` | Draw & Guess on screen: `WORD idx=n word=w`, `SIM correct=n`, `STROKE n=k pts=m`; the round then runs on the simulated clock |
 | `maze [go]`, `pass`, `hold [go]` | Tilt Duel / Hot Potato / Steady Hand: state or a tap (`GO X`, `PASS X`, `ERR too soon`) |
-| `sim tilt <ax> <ay> <ms>`, `sim shake`, `sim wait <ms>`, `sim fuse <ms>` | motion game on screen, simulated input and clock: `BALL cell=c,r`, `FINISH X ms=n`, `TIMEOUT O`, `SKIP X`, `BOOM X`, `CIRCLE move x= y= r=`, `BUBBLE d= r=`, `OUT X ms=n`, `WIN X`; `ERR` elsewhere |
+| `sim tilt <ax> <ay> <ms>`, `sim shake`, `sim wait <ms>`, `sim fuse <ms>` | motion game on screen, simulated input and clock: `BALL cell=c,r`, `FINISH X ms=n`, `TIMEOUT O`, `SHAKE ignored holder=X` (Hot Potato), `BOOM X`, `CIRCLE move x= y= r=`, `BUBBLE d= r=`, `OUT X ms=n`, `WIN X`; `ERR` elsewhere |
 | `imu` | `IMU ax=.. ay=.. az=.. raw_ax=..` (mg; `ax` is the games' X axis, the inverted `raw_ax`) |
-| `rules` | on Hot Potato: `SCREEN rules game=potato`, `RULES fuse=8-20s hold=2s skip=1 boom=loses` |
+| `rules` | on Hot Potato: `SCREEN rules game=potato`, `RULES fuse=8-20s hold=2s tick=faster boom=loses` |
 | `ota <url>`, `ota status` | `OTA start url=..`, `OTA progress pct=n`, `OTA done slot=..` or `OTA FAIL reason=..`; `OTA status state=.. running=ota_0 next=ota_1 fw=..` |
 | `update check`, `update install` | `UPDATE check repo=seblanc/pocketgame`, then `UPDATE result=newer\|same\|older latest=.. current=..` or `UPDATE ERR ..` |
 | `vol <0-100>` | `VOL n` (0 = silent) |

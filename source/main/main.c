@@ -324,12 +324,12 @@ static void play_event(game_event_t ev)
     static const sound_t SOUNDS[] = {
         [GEV_MOVE_X] = SND_X, [GEV_MOVE_O] = SND_O, [GEV_BAD] = SND_BAD,
         [GEV_WIN] = SND_WIN,  [GEV_DRAW] = SND_DRAW, [GEV_BOOM] = SND_BOOM,
-        [GEV_RUN_END] = SND_END, [GEV_DARE] = SND_DARE,
+        [GEV_RUN_END] = SND_END, [GEV_DARE] = SND_DARE, [GEV_TICK] = SND_FUSE,
     };
     if (ev != GEV_NONE) {
         sound_play(SOUNDS[ev]);
     }
-    if (ev != GEV_NONE && ev != GEV_BAD) {
+    if (ev != GEV_NONE && ev != GEV_BAD && ev != GEV_TICK) {
         request_redraw();
     }
 }
@@ -1374,12 +1374,17 @@ static void touch_task(void *arg)
 #define REDRAW_EVERY 2     /* motion ticks per frame while a round runs */
 #define REDRAW_TIMED 25    /* a clock-only game (Draw & Guess): its countdown, twice a second */
 #define MOVED_MG 150       /* a tilt change this big in a motion game restarts the idle timer */
-#define SHAKING_MG 450     /* | |a| - 1 g | above this is a jolt of continued shaking */
-#define SHAKING_HOLD_MS 300 /* the board counts as shaken this long after each jolt */
+/* a jolt of continued shaking: the acceleration this far from its slow average (gravity),
+ * so a gentle side-to-side shake counts as well as an up-and-down one */
+#define SHAKING_MG 280
+#define SHAKING_GRAVITY_K 0.08f /* the slow average follows over ~250 ms (tilting is no shake) */
+#define SHAKING_HOLD_MS 400 /* the board counts as shaken this long after each jolt */
 
 static void motion_task(void *arg)
 {
     float fx = 0, fy = 0, sx = 0, ref_x = 0, ref_y = 0;
+    float gx = 0, gy = 0, gz = 1000; /* the slow average of the acceleration */
+    bool have_g = false;
     uint32_t last = now_ms(), shake_at = 0, jolt_at = 0;
     bool jolted = false;
     for (int tick = 0;; tick++) {
@@ -1402,9 +1407,19 @@ static void motion_task(void *arg)
             shake_at = now;
         }
         /* shaking goes on while jolts keep coming (Defi Secousse adds up its time) */
-        if (live && fabsf(mag - 1000) > SHAKING_MG) {
-            jolt_at = now;
-            jolted = true;
+        if (live) {
+            if (!have_g) {
+                gx = ax, gy = ay, gz = az;
+                have_g = true;
+            }
+            float dx = ax - gx, dy = ay - gy, dz = az - gz;
+            gx += dx * SHAKING_GRAVITY_K;
+            gy += dy * SHAKING_GRAVITY_K;
+            gz += dz * SHAKING_GRAVITY_K;
+            if (sqrtf(dx * dx + dy * dy + dz * dz) > SHAKING_MG || fabsf(mag - 1000) > SHAKING_MG) {
+                jolt_at = now;
+                jolted = true;
+            }
         }
         bool shaking = jolted && now - jolt_at < SHAKING_HOLD_MS;
 

@@ -16,9 +16,13 @@
 #define SOFT_AMPLITUDE 2600
 #define SOFT_TAU_MS 7.0f /* soft notes: 1 ms attack, then this exponential decay */
 
+#define NOISE_AMPLITUDE 15000
+#define NOISE_TAU_FRAC 0.28f /* noise: decays with a time constant of this part of the note */
+
 typedef struct {
     uint16_t hz, ms;
-    bool soft; /* a quiet, decaying "tock" instead of a flat beep */
+    bool soft;  /* a quiet, decaying "tock" instead of a flat beep */
+    bool noise; /* an explosion: filtered noise, its cutoff sliding from hz down to hz / 8 */
 } note_t;
 
 static const note_t TUNE_X[] = {{660, 60}, {0, 0}};
@@ -28,13 +32,16 @@ static const note_t TUNE_WIN[] = {{523, 110}, {659, 110}, {784, 110}, {1047, 240
 static const note_t TUNE_DRAW[] = {{440, 160}, {330, 260}, {0, 0}};
 static const note_t TUNE_NEW[] = {{880, 50}, {1175, 70}, {0, 0}};
 static const note_t TUNE_TICK[] = {{990, 32, true}, {0, 0}}; /* slider and scroll steps */
-static const note_t TUNE_BOOM[] = {{196, 70}, {131, 90}, {98, 120}, {65, 360}, {0, 0}}; /* Hot Potato */
+static const note_t TUNE_BOOM[] = {{2400, 1400, false, true}, {0, 0}}; /* Hot Potato: the explosion */
+static const note_t TUNE_FUSE[] = {{1760, 22}, {0, 0}};                 /* Hot Potato: the fuse ticks */
 static const note_t TUNE_COIN[] = {{988, 45}, {1319, 110}, {0, 0}};             /* Coin Platformer: a pickup */
 static const note_t TUNE_END[] = {{784, 90}, {587, 90}, {392, 200}, {0, 0}};  /* a timed run is over */
 /* Defi Secousse: enough shaking, a dare comes up */
 static const note_t TUNE_DARE[] = {{392, 70}, {523, 70}, {659, 70}, {784, 70}, {1047, 70}, {784, 60}, {1047, 220}, {0, 0}};
 static const note_t *const TUNES[] = {TUNE_X,    TUNE_O,    TUNE_BAD,  TUNE_WIN, TUNE_DRAW,
-                                      TUNE_NEW,  TUNE_TICK, TUNE_BOOM, TUNE_COIN, TUNE_END, TUNE_DARE};
+                                      TUNE_NEW,  TUNE_TICK, TUNE_BOOM, TUNE_COIN, TUNE_END, TUNE_DARE,
+                                      TUNE_FUSE};
+_Static_assert(sizeof(TUNES) / sizeof(TUNES[0]) == SND_FUSE + 1, "one tune per sound");
 
 static QueueHandle_t s_q;
 static i2s_chan_handle_t s_tx;
@@ -42,9 +49,49 @@ static volatile int s_vol = 70;
 
 static uint8_t dac_level(void) { return s_vol <= 0 ? 0 : (uint8_t)(DAC_MAX - (100 - s_vol) * DAC_RANGE / 100); }
 
+/* a bang, then a rumble: white noise through a one-pole low-pass whose cutoff slides
+ * down, with a sharp attack and an exponential decay */
+static void play_noise(const note_t *n)
+{
+    static int16_t buf[256 * 2];
+    static uint32_t rnd = 0x9E3779B9u;
+    int total = RATE * n->ms / 1000, done = 0;
+    float decay = expf(-1.0f / (NOISE_TAU_FRAC * total)), env = 1, lp = 0, lp2 = 0;
+    int attack = RATE / 400;
+    while (done < total) {
+        int frames = total - done > 256 ? 256 : total - done;
+        for (int i = 0; i < frames; i++, done++) {
+            rnd ^= rnd << 13;
+            rnd ^= rnd >> 17;
+            rnd ^= rnd << 5;
+            float white = (float)(int32_t)rnd / 2147483648.0f;
+            float t = (float)done / total;
+            float hz = n->hz * (1.0f - t * 0.875f);
+            float k = 1.0f - expf(-2 * (float)M_PI * hz / RATE);
+            lp += (white - lp) * k;
+            lp2 += (lp - lp2) * k; /* two poles: a deeper, rounder rumble */
+            env *= decay;
+            float a = done < attack ? (float)done / attack : 1.0f;
+            if (total - done < RATE / 100) {
+                a *= (float)(total - done) / (RATE / 100);
+            }
+            /* a lower cutoff passes less of the noise: keep the rumble loud */
+            float s = lp2 * (1.5f / sqrtf(k)) * NOISE_AMPLITUDE * env * a;
+            s = s > 32000 ? 32000 : s < -32000 ? -32000 : s;
+            buf[2 * i] = buf[2 * i + 1] = (int16_t)s;
+        }
+        size_t written;
+        i2s_channel_write(s_tx, buf, frames * 4, &written, pdMS_TO_TICKS(500));
+    }
+}
+
 static void play_note(const note_t *n)
 {
     static int16_t buf[256 * 2];
+    if (n->noise) {
+        play_noise(n);
+        return;
+    }
     int total = RATE * n->ms / 1000, done = 0;
     float phase = 0, step = 2 * (float)M_PI * n->hz / RATE;
     int fade = n->soft ? RATE / 1000 : RATE / 200; /* ramps avoid clicks */
@@ -190,7 +237,7 @@ void sound_play(sound_t s)
     }
     /* ticks come in bursts while dragging: drop one while sound is still queued, so
      * the ticks follow the finger instead of piling up after it stops */
-    if (s == SND_TICK && uxQueueMessagesWaiting(s_q) > 0) {
+    if ((s == SND_TICK || s == SND_FUSE) && uxQueueMessagesWaiting(s_q) > 0) {
         return;
     }
     xQueueSend(s_q, &s, 0);
