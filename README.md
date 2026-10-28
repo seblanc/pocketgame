@@ -3,7 +3,7 @@
 A small multi-game handheld for the ESP32-S3-LCD-1.54 touch board (ESP-IDF, `source/`).
 Minimal UI: dark background, thin lines, one accent colour.
 
-- **Home screen:** no title, one touch tile per game right below the bar (Tic-tac-toe, Connect 4, Tilt Duel, Hot Potato, Steady Hand, Draw & Guess; all games are for 2 players) and a thin top bar with the battery %
+- **Home screen:** no title, one touch tile per game right below the bar (Tic-tac-toe, Connect 4, Tilt Duel, Hot Potato, Steady Hand, Draw & Guess, Coin Platformer; all games are for 2 players) and a thin top bar with the battery %
   (IO1 / VBAT_ADC, 200k/100k divider) and the Wi-Fi state. The bar only shows outside games.
 - **Games** are self-contained modules in `source/main/game/` (one `.c/.h` per game) behind the common
   interface in `game/game.h` (rules, board drawing, touch mapping, UART command); `GAMES[]` in `main.c`
@@ -29,6 +29,11 @@ Minimal UI: dark background, thin lines, one accent colour.
   A hand-over screen asks to pass the board; the guesser taps to see the drawing and picks one of 3 words
   (the secret word and 2 distinct decoys, shuffled). A right guess scores a point for the guesser; then
   the roles swap.
+- **Coin Platformer:** one level of five small platforms and seven coins. LEFT / RIGHT walk, a tap on
+  the screen jumps (the first tap starts the run); gravity pulls the player down, platforms are landed
+  on from above and walking off one falls back down. Touching a coin collects it (pickup sound); the
+  coins and a 60 s countdown are on screen. X runs first, then O runs the same level with every coin
+  back; more coins wins. During a run LEFT does not go back (hold L + R for Settings instead).
 - **Tic-tac-toe:** tap a cell to place X or O; after a win or a draw, tap anywhere for a new game.
   X is blue, O is red: a banner in the player's colour shows who starts ("X STARTS") and whose turn it
   is. The starting player alternates after every finished round (an abandoned round keeps its starter).
@@ -71,7 +76,8 @@ Serial commands (USB-C console, 115200):
 | `play <0-8>` | tic-tac-toe: `BOARD X.O......`, `TURN O`, `WIN X line=0,1,2`, `DRAW`, `ERR occupied\|game over\|bad cell` |
 | `drop <0-6> [<0-6> ...]` | Connect 4, one drop per number: `DROP X col=3 row=0`, `BOARD` + 42 cells (top row first), `TURN O`, `WIN X cells=a,b,c,d`, `DRAW`, `ERR range\|full column n\|game over` |
 | `status` | `STATUS screen=menu game=ttt bat=87 mv=4012 wifi=connected ip=... starter=X vol=70` |
-| `open ttt\|c4\|tilt\|potato\|steady\|draw`, `back`, `yes`, `no`, `settings` | `SCREEN menu\|game=<id>\|confirm\|settings\|wifi`, `MENU games=6` |
+| `open ttt\|c4\|tilt\|potato\|steady\|draw\|plat`, `back`, `yes`, `no`, `settings` | `SCREEN menu\|game=<id>\|confirm\|settings\|wifi`, `MENU games=7` |
+| `level [jump]`, `sim jump`, `sim move L\|R <ms>`, `sim wait <ms>`, `sim autoplay` | Coin Platformer: `LEVEL plats=n coins=n id=hex`, `GO X`, `JUMP X`, `ERR airborne`, `LAND ground\|plat=n`, `COIN X idx=n n=k`, `SCORE X=n O=n`, `PLAYER x= y= on=ground\|platN\|air`, `FINISH X coins=n`, `TURN O`, `RUN O id=hex same=yes`, `WIN X x=n o=n`, `DRAW` |
 | `done`, `reveal`, `guess <0-2>`, `start`, `undo`, `clear` | Draw & Guess: `READY drawer=X`, `SCREEN handover`, `CHOICES a,b,c correct=n word=w`, `RESULT correct\|wrong`, `SCORE X=n O=n`, `TURN drawer=O`, `TIME up drawer=X`, `ERR not guessing\|empty` |
 | `sim word <idx>`, `sim correct <0-2>`, `sim stroke`, `sim wait <ms>` | Draw & Guess on screen: `WORD idx=n word=w`, `SIM correct=n`, `STROKE n=k pts=m`; the round then runs on the simulated clock |
 | `maze [go]`, `pass`, `hold [go]` | Tilt Duel / Hot Potato / Steady Hand: state or a tap (`GO X`, `PASS X`, `ERR too soon`) |
@@ -88,6 +94,7 @@ Serial commands (USB-C console, 115200):
 Host tests of the rules:
 `gcc -DGAME_RULES_ONLY -I source/main tests/test_game.c source/main/game/tictactoe.c -o test_game && ./test_game`,
 `gcc -DGAME_RULES_ONLY -I source/main tests/test_connect4.c source/main/game/connect4.c -o test_c4 && ./test_c4`,
-`gcc -DGAME_RULES_ONLY -I source/main tests/test_motion.c source/main/game/tilt.c source/main/game/potato.c source/main/game/steady.c -lm -o test_motion && ./test_motion`
+`gcc -DGAME_RULES_ONLY -I source/main tests/test_motion.c source/main/game/tilt.c source/main/game/potato.c source/main/game/steady.c -lm -o test_motion && ./test_motion`,
+`gcc -DGAME_RULES_ONLY -I source/main tests/test_plat.c source/main/game/plat.c -lm -o test_plat && ./test_plat`
 
 Host test of the list scrolling: `gcc -I source/main tests/test_scroll.c source/main/scroll.c -lm -o test_scroll && ./test_scroll`

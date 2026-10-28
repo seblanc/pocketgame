@@ -2,7 +2,7 @@
  *
  * Screens: home menu (one tile per game, top bar with battery % and Wi-Fi), the
  * games (tic-tac-toe, Connect 4, the IMU games Tilt Duel, Hot Potato and Steady Hand,
- * and Draw & Guess, modules in game/), a leave-game confirmation,
+ * Draw & Guess and Coin Platformer, modules in game/), a leave-game confirmation,
  * Settings (volume, where 0 is silent, Wi-Fi, updates), the Wi-Fi setup hotspot screen,
  * the update screen (GitHub check, download progress) and a game's rules screen.
  *
@@ -40,6 +40,12 @@
  *                              SCREEN handover, CHOICES a,b,c correct=n word=w, RESULT
  *                              correct|wrong, SCORE X=n O=n, TURN drawer=O; sim word <idx>,
  *                              sim correct <0-2>, sim stroke (WORD | SIM | STROKE ...)
+ *   level [jump]               Coin Platformer (switches to it): LEVEL plats=n coins=n id=hex,
+ *                              PLAYER ..., or a tap: JUMP X | ERR airborne; sim jump,
+ *                              sim move L|R <ms>, sim autoplay (collects every coin); events
+ *                              LAND ground|plat=n, COIN X idx=n n=n + SCORE X=n O=n,
+ *                              FINISH X coins=n, TURN O + RUN O id=hex same=yes | WIN | DRAW.
+ *                              During a run LEFT / RIGHT walk instead of going back
  *   sim idle <ms> | sim touch  any screen: the idle timer jumps ahead (SIM idle=ms) / a
  *                              touch (INPUT touch); on USB a timeout replies
  *                              POWER usb: auto-off disabled and the board stays on
@@ -88,6 +94,7 @@
 #include "game/potato.h"
 #include "game/steady.h"
 #include "game/tictactoe.h"
+#include "game/plat.h"
 #include "game/tilt.h"
 #include "hal/usb_serial_jtag_ll.h"
 #include "soc/usb_serial_jtag_struct.h"
@@ -112,7 +119,8 @@
 #define TIMER_MS 30 /* the hint animation and the idle check */
 
 /* the home menu tiles, in order; the first one is the default game */
-const game_def_t *const GAMES[] = {&TICTACTOE, &CONNECT4, &TILT_DUEL, &HOT_POTATO, &STEADY_HAND, &DRAW_GUESS};
+const game_def_t *const GAMES[] = {&TICTACTOE, &CONNECT4, &TILT_DUEL, &HOT_POTATO, &STEADY_HAND, &DRAW_GUESS,
+                                     &COIN_PLATFORMER};
 const int GAME_COUNT = sizeof(GAMES) / sizeof(GAMES[0]);
 _Static_assert(sizeof(GAMES) / sizeof(GAMES[0]) <= GAME_MAX, "raise GAME_MAX");
 
@@ -296,6 +304,7 @@ static void play_event(game_event_t ev)
     static const sound_t SOUNDS[] = {
         [GEV_MOVE_X] = SND_X, [GEV_MOVE_O] = SND_O, [GEV_BAD] = SND_BAD,
         [GEV_WIN] = SND_WIN,  [GEV_DRAW] = SND_DRAW, [GEV_BOOM] = SND_BOOM,
+        [GEV_RUN_END] = SND_END,
     };
     if (ev != GEV_NONE) {
         sound_play(SOUNDS[ev]);
@@ -782,13 +791,29 @@ static void handle_sim(const char *arg)
     const game_def_t *g = GAMES[s_v.game_idx];
     if (s_v.screen != SCR_GAME || !g->step) {
         unlock();
-        out("ERR sim needs a motion game on screen (open tilt | potato | steady | draw)");
+        out("ERR sim needs a motion game on screen (open tilt | potato | steady | draw | plat)");
         return;
     }
     motion_t m = {.sim = true};
     long ms = 0;
     bool solve = false;
-    if (strcmp(key, "solve") == 0 && n == 1 && g->autopilot) {
+    char side = 0;
+    if (strcmp(key, "jump") == 0 && n == 1 && g->steer) {
+        /* a tap of the steering game (Coin Platformer): JUMP X | ERR airborne */
+        s_sim[s_v.game_idx] = true;
+        game_event_t ev = g->move(slot_locked()->st.bytes, 0, "sim");
+        moved_locked(ev);
+        unlock();
+        play_event(ev);
+        request_redraw();
+        return;
+    }
+    if (strcmp(key, "move") == 0 && g->steer && sscanf(arg, "%*s %c %ld", &side, &a) == 2 &&
+        (side == 'L' || side == 'R' || side == 'l' || side == 'r') && a >= 0 && a <= 600000) {
+        /* LEFT or RIGHT held for a while */
+        m.dir = side == 'L' || side == 'l' ? -1 : 1;
+        ms = a;
+    } else if ((strcmp(key, "solve") == 0 || strcmp(key, "autoplay") == 0) && n == 1 && g->autopilot) {
         solve = true;
         ms = 65000; /* past the 60 s limit of a run */
     } else if (strcmp(key, "tilt") == 0 && n == 4 && c >= 0 && c <= 600000) {
@@ -808,7 +833,8 @@ static void handle_sim(const char *arg)
     } else {
         unlock();
         out("ERR sim (tilt <ax> <ay> <ms> | shake | wait <ms>%s | idle <ms> | touch)",
-            g->autopilot ? " | seed <n> | solve"
+            g->steer       ? " | jump | move L|R <ms> | autoplay"
+            : g->autopilot ? " | seed <n> | solve"
             : g->timed   ? " | word <idx> | correct <0-2> | stroke"
             : g->sim_set ? " | fuse <ms>"
                          : "");
@@ -962,7 +988,7 @@ static void handle_line(char *line)
             }
         }
         out("ERR unknown command (new | play <0-8> | drop <0-6> ... | maze | pass | hold | done | reveal | guess <0-2> | "
-            "sim ... | imu | rules | board | status | open ttt|c4|tilt|potato|steady|draw | back | yes | no | "
+            "level | sim ... | imu | rules | board | status | open ttt|c4|tilt|potato|steady|draw|plat | back | yes | no | "
             "settings | vol <0-100> | wifi ... | ota <url>|status | update check|install)");
     }
 }
@@ -1315,6 +1341,10 @@ static void motion_task(void *arg)
         bool running = false, timed = g->timed;
         if (on) {
             motion_t m = {.tx = (int)fx, .ty = (int)fy, .shake = shake, .dt_ms = dt > 200 ? 200 : dt};
+            if (g->steer && g->steer(slot_locked()->st.bytes)) {
+                /* held keys walk; both held is the Settings combo, not a direction */
+                m.dir = (gpio_get_level(KEY_RIGHT) == 0) - (gpio_get_level(KEY_LEFT) == 0);
+            }
             if (shake) {
                 out("SHAKE mg=%d", (int)mag);
             }
@@ -1364,6 +1394,16 @@ static void power_off(void)
     sleep_until_power_key();
 }
 
+/* LEFT / RIGHT walk in the game on screen (a Coin Platformer run): no going back */
+static bool keys_steer(void)
+{
+    lock();
+    const game_def_t *g = GAMES[s_v.game_idx];
+    bool steer = s_v.screen == SCR_GAME && g->steer && g->steer(slot_locked()->st.bytes);
+    unlock();
+    return steer;
+}
+
 static void button_task(void *arg)
 {
     static const int PINS[3] = {KEY_LEFT, KEY_RIGHT, KEY_PWR};
@@ -1410,7 +1450,7 @@ static void button_task(void *arg)
                 used[i] = app_input("button");
             } else {
                 bool short_press = !used[i] && now - down_at[i] < pdMS_TO_TICKS(SHORT_PRESS_MS);
-                if (short_press && i == 0) {
+                if (short_press && i == 0 && !keys_steer()) {
                     app_back("button");
                 }
             }

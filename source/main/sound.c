@@ -29,7 +29,10 @@ static const note_t TUNE_DRAW[] = {{440, 160}, {330, 260}, {0, 0}};
 static const note_t TUNE_NEW[] = {{880, 50}, {1175, 70}, {0, 0}};
 static const note_t TUNE_TICK[] = {{990, 32, true}, {0, 0}}; /* slider and scroll steps */
 static const note_t TUNE_BOOM[] = {{196, 70}, {131, 90}, {98, 120}, {65, 360}, {0, 0}}; /* Hot Potato */
-static const note_t *const TUNES[] = {TUNE_X, TUNE_O, TUNE_BAD, TUNE_WIN, TUNE_DRAW, TUNE_NEW, TUNE_TICK, TUNE_BOOM};
+static const note_t TUNE_COIN[] = {{988, 45}, {1319, 110}, {0, 0}};             /* Coin Platformer: a pickup */
+static const note_t TUNE_END[] = {{784, 90}, {587, 90}, {392, 200}, {0, 0}};  /* a timed run is over */
+static const note_t *const TUNES[] = {TUNE_X,    TUNE_O,    TUNE_BAD,  TUNE_WIN, TUNE_DRAW,
+                                      TUNE_NEW,  TUNE_TICK, TUNE_BOOM, TUNE_COIN, TUNE_END};
 
 static QueueHandle_t s_q;
 static i2s_chan_handle_t s_tx;

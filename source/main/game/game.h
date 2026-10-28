@@ -33,6 +33,7 @@ typedef enum {
     GEV_WIN,
     GEV_DRAW,
     GEV_BOOM,   /* a win for r.winner announced with the boom (Hot Potato) */
+    GEV_RUN_END, /* a timed run ended, the other player's run is next (Coin Platformer) */
 } game_event_t;
 
 /* The motion games (Tilt Duel, Hot Potato, Steady Hand) are driven by time steps: the
@@ -44,6 +45,8 @@ typedef struct {
     bool shake;     /* a firm shake in this step */
     uint32_t dt_ms; /* time this step covers */
     bool sim;       /* injected over UART: a run waiting for its tap starts by itself */
+    int dir;        /* games with steer(): -1 LEFT held, 1 RIGHT held, 0 neither (or both) */
+    bool jump;      /* a jump in this step (Coin Platformer's autopilot) */
 } motion_t;
 
 /* a random number for the games (hidden timers); the app provides it */
@@ -102,6 +105,9 @@ typedef struct {
     void (*banner)(const void *st, char *buf, int n, uint8_t *mark);
     /* a finished round was scored: the scores and who starts the next round */
     void (*finished)(const void *st, int wins_x, int wins_o, uint8_t next);
+    /* LEFT / RIGHT are the game's controls (motion_t.dir) while this is true; a short
+     * LEFT press then does not go back (Coin Platformer during a run) */
+    bool (*steer)(const void *st);
 } game_def_t;
 
 #define GAME_HIT_PEN (-2)
