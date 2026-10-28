@@ -45,7 +45,7 @@ typedef struct {
     bool shake;     /* a firm shake in this step */
     uint32_t dt_ms; /* time this step covers */
     bool sim;       /* injected over UART: a run waiting for its tap starts by itself */
-    int dir;        /* games with steer(): -1 LEFT held, 1 RIGHT held, 0 neither (or both) */
+    int dir;        /* games with steer(), over UART only: -1 walk left, 1 right, 0 by tilt */
     bool jump;      /* a jump in this step (Coin Platformer's autopilot) */
 } motion_t;
 
@@ -105,8 +105,8 @@ typedef struct {
     void (*banner)(const void *st, char *buf, int n, uint8_t *mark);
     /* a finished round was scored: the scores and who starts the next round */
     void (*finished)(const void *st, int wins_x, int wins_o, uint8_t next);
-    /* LEFT / RIGHT are the game's controls (motion_t.dir) while this is true; a short
-     * LEFT press then does not go back (Coin Platformer during a run) */
+    /* non-NULL: a steering game (Coin Platformer), walked by tilt, a RIGHT press is a
+     * move (a jump) or, once the round is over, the next round; true while a run goes */
     bool (*steer)(const void *st);
 } game_def_t;
 

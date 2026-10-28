@@ -45,7 +45,7 @@
  *                              sim move L|R <ms>, sim autoplay (collects every coin); events
  *                              LAND ground|plat=n, COIN X idx=n n=n + SCORE X=n O=n,
  *                              FINISH X coins=n, TURN O + RUN O id=hex same=yes | WIN | DRAW.
- *                              During a run LEFT / RIGHT walk instead of going back
+ *                              On the board tilting walks, RIGHT jumps (or starts the next round)
  *   sim idle <ms> | sim touch  any screen: the idle timer jumps ahead (SIM idle=ms) / a
  *                              touch (INPUT touch); on USB a timeout replies
  *                              POWER usb: auto-off disabled and the board stays on
@@ -1341,10 +1341,6 @@ static void motion_task(void *arg)
         bool running = false, timed = g->timed;
         if (on) {
             motion_t m = {.tx = (int)fx, .ty = (int)fy, .shake = shake, .dt_ms = dt > 200 ? 200 : dt};
-            if (g->steer && g->steer(slot_locked()->st.bytes)) {
-                /* held keys walk; both held is the Settings combo, not a direction */
-                m.dir = (gpio_get_level(KEY_RIGHT) == 0) - (gpio_get_level(KEY_LEFT) == 0);
-            }
             if (shake) {
                 out("SHAKE mg=%d", (int)mag);
             }
@@ -1394,14 +1390,23 @@ static void power_off(void)
     sleep_until_power_key();
 }
 
-/* LEFT / RIGHT walk in the game on screen (a Coin Platformer run): no going back */
-static bool keys_steer(void)
+/* RIGHT in a steering game on screen (Coin Platformer, held upright and steered by tilt):
+ * a jump while the round runs (the first one starts the run), the next round once it is
+ * over, so no finger is needed on the screen */
+static void key_jump(void)
 {
     lock();
     const game_def_t *g = GAMES[s_v.game_idx];
-    bool steer = s_v.screen == SCR_GAME && g->steer && g->steer(slot_locked()->st.bytes);
+    int idx = s_v.game_idx;
+    bool steer = s_v.screen == SCR_GAME && g->steer;
+    bool over = steer && round_locked()->status != GAME_PLAYING;
     unlock();
-    return steer;
+    if (over) {
+        app_new_game("button");
+    } else if (steer) {
+        app_move(idx, 0, "button");
+        request_redraw();
+    }
 }
 
 static void button_task(void *arg)
@@ -1448,9 +1453,12 @@ static void button_task(void *arg)
                 down_at[i] = now;
                 /* a press while the board is switching off does nothing else */
                 used[i] = app_input("button");
+                if (!used[i] && i == 1 && !down[0]) {
+                    key_jump();
+                }
             } else {
                 bool short_press = !used[i] && now - down_at[i] < pdMS_TO_TICKS(SHORT_PRESS_MS);
-                if (short_press && i == 0 && !keys_steer()) {
+                if (short_press && i == 0) {
                     app_back("button");
                 }
             }

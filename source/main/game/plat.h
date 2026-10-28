@@ -2,8 +2,8 @@
 #include "game.h"
 
 /* Coin Platformer: each player in turn has a 60 s run on the same level of small
- * platforms with coins on them. LEFT / RIGHT walk, a tap on the screen jumps (from the
- * ground or a platform only); gravity pulls the player down, platforms are landed on
+ * platforms with coins on them. Tilting the board left / right walks (flat or held
+ * upright), RIGHT or a tap on the screen jumps (from the ground or a platform only); gravity pulls the player down, platforms are landed on
  * from above (jumped through from below) and walking off one falls to the level below.
  * Touching a coin collects it. A run starts on the first tap and ends after 60 s or
  * when every coin is taken; then the other player runs the level with all coins back.
@@ -67,10 +67,15 @@ uint32_t plat_level_id(const plat_t *g);
 bool plat_go(plat_t *g);
 /* a jump of the running player; false while airborne */
 bool plat_jump(plat_t *g);
-/* Advances the running round by up to *dt_ms walking dir (-1, 0, 1) and returns at the
- * first event, *dt_ms then holds the time left (call again until it is 0). A run that
- * ends (PLAT_EV_FINISH) hands over to the other player or ends the round. */
-plat_ev_t plat_step(plat_t *g, int dir, uint32_t *dt_ms);
+/* Advances the running round by up to *dt_ms walking at walk (-1 full speed left .. 1
+ * full speed right) and returns at the first event, *dt_ms then holds the time left
+ * (call again until it is 0). A run that ends (PLAT_EV_FINISH) hands over to the other
+ * player or ends the round. */
+plat_ev_t plat_step(plat_t *g, float walk, uint32_t *dt_ms);
+/* the walk speed for a screen tilt tx in mg (> 0 right edge lower): none in a small
+ * dead zone around level, then growing to full speed at about 25 degrees. The x
+ * tilt is the same whether the board lies flat or is held upright facing the player. */
+float plat_tilt_walk(int tx);
 /* sim autoplay: the walk direction and whether to jump for the next step, along a
  * fixed route that collects every coin */
 void plat_autopilot(plat_t *g, int *dir, bool *jump);

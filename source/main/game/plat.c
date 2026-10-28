@@ -142,9 +142,9 @@ static bool grab_coin(plat_t *g)
 }
 
 /* one physics step of dt s; true when the player landed */
-static bool move(plat_t *g, int dir, float dt)
+static bool move(plat_t *g, float walk, float dt)
 {
-    g->x = clampf(g->x + dir * WALK * dt, PLAT_X_MIN, PLAT_X_MAX);
+    g->x = clampf(g->x + walk * WALK * dt, PLAT_X_MIN, PLAT_X_MAX);
     if (g->on < PLAT_NPLATS && !over(&PLAT_PLATFORMS[g->on], g->x)) {
         g->on = PLAT_ON_AIR; /* walked off the edge */
         g->vy = 0;
@@ -183,15 +183,28 @@ static bool move(plat_t *g, int dir, float dt)
     return false;
 }
 
-plat_ev_t plat_step(plat_t *g, int dir, uint32_t *dt_ms)
+#define TILT_DEAD 90  /* mg: about 5 degrees */
+#define TILT_FULL 420 /* mg: about 25 degrees */
+
+float plat_tilt_walk(int tx)
+{
+    int a = tx < 0 ? -tx : tx;
+    if (a <= TILT_DEAD) {
+        return 0;
+    }
+    float w = clampf((float)(a - TILT_DEAD) / (TILT_FULL - TILT_DEAD), 0, 1);
+    return tx < 0 ? -w : w;
+}
+
+plat_ev_t plat_step(plat_t *g, float walk, uint32_t *dt_ms)
 {
     if (g->r.status != GAME_PLAYING || g->run != PLAT_GO) {
         *dt_ms = 0;
         return PLAT_EV_NONE;
     }
-    dir = dir > 0 ? 1 : dir < 0 ? -1 : 0;
-    if (dir) {
-        g->face = (int8_t)dir;
+    walk = clampf(walk, -1, 1);
+    if (walk) {
+        g->face = walk > 0 ? 1 : -1;
     }
     for (;;) {
         if (grab_coin(g)) {
@@ -205,7 +218,7 @@ plat_ev_t plat_step(plat_t *g, int dir, uint32_t *dt_ms)
             return PLAT_EV_NONE;
         }
         uint32_t s = *dt_ms < SUB_MS ? *dt_ms : SUB_MS;
-        if (dir == 0 && g->on != PLAT_ON_AIR) {
+        if (walk == 0 && g->on != PLAT_ON_AIR) {
             s = *dt_ms; /* standing still: only the clock runs */
         }
         if (g->ms + s > PLAT_LIMIT_MS) {
@@ -213,7 +226,7 @@ plat_ev_t plat_step(plat_t *g, int dir, uint32_t *dt_ms)
         }
         *dt_ms -= s;
         g->ms += s;
-        if (move(g, dir, s / 1000.0f)) {
+        if (move(g, walk, s / 1000.0f)) {
             return PLAT_EV_LAND;
         }
     }
@@ -357,7 +370,7 @@ static void start_run(plat_t *g, const char *src)
     }
 }
 
-/* the only move: a tap jumps (the first one also starts the run) */
+/* the only move: RIGHT or a tap jumps (the first one also starts the run) */
 static game_event_t plat_move(void *st, int m, const char *src)
 {
     (void)m;
@@ -369,8 +382,8 @@ static game_event_t plat_move(void *st, int m, const char *src)
     start_run(g, src);
     if (!plat_jump(g)) {
         app_out("ERR airborne");
-        /* a finger tapping in mid-air is no mistake worth a buzz */
-        return strcmp(src, "touch") == 0 ? GEV_NONE : GEV_BAD;
+        /* a key or finger pressed in mid-air is no mistake worth a buzz */
+        return strcmp(src, "touch") == 0 || strcmp(src, "button") == 0 ? GEV_NONE : GEV_BAD;
     }
     app_out("JUMP %c", game_mark_char(mark_of(g)));
     return GEV_NONE;
@@ -403,8 +416,10 @@ static game_event_t plat_step_ev(void *st, const motion_t *m)
     }
     uint8_t p = g->r.turn;
     uint32_t dt = m->dt_ms;
+    /* UART walks hold a direction; otherwise the board's left / right tilt walks */
+    float walk = m->dir ? (float)m->dir : plat_tilt_walk(m->tx);
     for (;;) {
-        switch (plat_step(g, m->dir, &dt)) {
+        switch (plat_step(g, walk, &dt)) {
         case PLAT_EV_NONE:
             return GEV_NONE;
         case PLAT_EV_LAND:
@@ -442,7 +457,7 @@ static void plat_autopilot_ev(const void *st, motion_t *m)
     plat_autopilot((plat_t *)st, &m->dir, &m->jump);
 }
 
-/* LEFT and RIGHT walk while a run is going; otherwise LEFT goes back as everywhere */
+/* tilt walks while a run is going; RIGHT jumps */
 static bool plat_steer(const void *st)
 {
     const plat_t *g = st;
@@ -479,6 +494,29 @@ static void draw_coin(float x, float y, float r)
 {
     gfx_disc(x, y, r, COL_COIN);
     gfx_disc(x - r * 0.3f, y - r * 0.3f, r * 0.3f, COL_COIN_HI);
+}
+
+/* the round's result over the level: both players' coins, big, and the winner */
+static void draw_final(const plat_t *g)
+{
+    const int x0 = 20, y0 = 70, w = 200, h = 112;
+    uint16_t edge = g->r.status == GAME_WIN ? (g->r.winner == CELL_X ? COL_X : COL_O) : COL_TEXT;
+    gfx_rect(x0, y0, w, h, COL_BG);
+    gfx_rrect(x0, y0, w, h, 6, edge);
+    gfx_text_mid(SCREEN_W / 2, y0 + 10, "FINAL SCORE", 1, COL_DIM);
+    char buf[16];
+    snprintf(buf, sizeof(buf), "X %d", g->coins[CELL_X]);
+    gfx_text_mid(SCREEN_W / 2 - 46, y0 + 28, buf, 3, COL_X);
+    snprintf(buf, sizeof(buf), "O %d", g->coins[CELL_O]);
+    gfx_text_mid(SCREEN_W / 2 + 46, y0 + 28, buf, 3, COL_O);
+    draw_coin(SCREEN_W / 2, y0 + 38, 6);
+    if (g->r.status == GAME_WIN) {
+        snprintf(buf, sizeof(buf), "%c WINS!", game_mark_char(g->r.winner));
+    } else {
+        snprintf(buf, sizeof(buf), "DRAW");
+    }
+    gfx_text_mid(SCREEN_W / 2, y0 + 62, buf, 2, edge);
+    gfx_text_mid(SCREEN_W / 2, y0 + 92, "RIGHT: NEW ROUND", 1, COL_DIM);
 }
 
 static void plat_draw(const void *st, int preview)
@@ -522,9 +560,11 @@ static void plat_draw(const void *st, int preview)
     }
     gfx_text_right(222, INFO_Y, line, 1, COL_O);
     draw_coin(230, INFO_Y + 3, 4);
-    if (g->r.status == GAME_PLAYING) {
+    if (g->r.status != GAME_PLAYING) {
+        draw_final(g);
+    } else {
         if (g->run == PLAT_WAIT) {
-            snprintf(line, sizeof(line), "TAP TO START");
+            snprintf(line, sizeof(line), "RIGHT TO START");
         } else {
             snprintf(line, sizeof(line), "%d/%d  %luS", popcount16(g->taken), PLAT_NCOINS,
                      (unsigned long)((PLAT_LIMIT_MS - g->ms + 999) / 1000));
