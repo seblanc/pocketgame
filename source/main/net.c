@@ -604,7 +604,7 @@ bool net_init(void)
 {
     uint8_t mac[6];
     esp_read_mac(mac, ESP_MAC_WIFI_SOFTAP);
-    snprintf(s_ap_name, sizeof(s_ap_name), "PocketGame-%02X%02X", mac[4], mac[5]);
+    snprintf(s_ap_name, sizeof(s_ap_name), "POCKETGAME-%02X%02X", mac[4], mac[5]);
 
     if (esp_netif_init() != ESP_OK) {
         return false;

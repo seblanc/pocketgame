@@ -7,7 +7,7 @@ include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 # version; .github/workflows/release-image.yml also rewrites this line to the release tag
 # so the published pocketgame.bin always reports exactly the tag.
 # Raise the patch number (v1.4.1, v1.4.2, ...) in every iteration that changes the firmware.
-set(POCKETGAME_FW_VERSION "v1.4.0")
+set(POCKETGAME_FW_VERSION "v1.4.1")
 idf_build_set_property(COMPILE_DEFINITIONS "FW_VERSION=\"${POCKETGAME_FW_VERSION}\"" APPEND)
 
 project(pocketgame)

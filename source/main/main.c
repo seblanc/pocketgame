@@ -509,6 +509,7 @@ static void snapshot(app_view_t *v)
     unlock();
     v->wifi = net_state();
     net_ip(v->ip, sizeof(v->ip));
+    strlcpy(v->ap_name, net_ap_name(), sizeof(v->ap_name));
     ota_get_view(&v->ota);
 }
 

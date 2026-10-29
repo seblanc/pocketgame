@@ -439,7 +439,8 @@ static void draw_wifi(const app_view_t *v)
     char buf[40];
     title("CONFIG WI-FI");
     gfx_text(16, 54, "1. SUR TON TELEPHONE, REJOINS", 1, COL_DIM);
-    gfx_text(16, 70, v->ap_name, 2, COL_ACCENT);
+    /* the SSID must stay whole on the 240 px screen: drop to scale 1 if too wide */
+    gfx_text(16, 70, v->ap_name, gfx_text_w(v->ap_name, 2) <= SCREEN_W - 32 ? 2 : 1, COL_ACCENT);
     gfx_text(16, 100, "2. LA PAGE DE CONFIG S'OUVRE", 1, COL_DIM);
     gfx_text(16, 112, "   (OU VA SUR 192.168.4.1)", 1, COL_DIM);
 
